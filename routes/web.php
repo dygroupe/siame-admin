@@ -15,6 +15,7 @@ use App\Http\Controllers\FlutterwaveV3Controller;
 use App\Http\Controllers\PaypalPaymentController;
 use App\Http\Controllers\StripePaymentController;
 use App\Http\Controllers\SslCommerzPaymentController;
+use App\Http\Controllers\WaveController;
 use Illuminate\Support\Facades\Http;
 
 /*
@@ -164,6 +165,13 @@ if (!$is_published) {
             // Refund Routes for bKash
             // Route::get('refund', 'BkashRefundController@index')->name('bkash-refund');
             // Route::post('refund', 'BkashRefundController@refund')->name('bkash-refund');
+        });
+
+        //WAVE
+        Route::group(['prefix' => 'wave', 'as' => 'wave.'], function () {
+            Route::get('pay', [WaveController::class, 'initialize'])->name('pay');
+            Route::get('callback', [WaveController::class, 'callback'])->name('callback');
+            Route::post('webhook', [WaveController::class, 'webhook'])->name('webhook')->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
         });
 
         //Liqpay

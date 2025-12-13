@@ -60,6 +60,7 @@ class ConfigServiceProvider extends ServiceProvider
                     'paypal',
                     'ssl_commerz',
                     'paystack',
+                    'wave',
                 ];
 
             $data = Setting::whereIn('key_name', $gateway)->pluck('live_values', 'key_name')->toArray();

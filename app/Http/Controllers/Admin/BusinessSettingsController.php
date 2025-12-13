@@ -825,7 +825,7 @@ class BusinessSettingsController extends Controller
                 }
             }
         }
-        $data_values = Setting::whereIn('settings_type', ['payment_config'])->whereIn('key_name', ['ssl_commerz', 'paypal', 'stripe', 'razor_pay', 'senang_pay', 'paytabs', 'paystack', 'paymob_accept', 'paytm', 'flutterwave', 'liqpay', 'bkash', 'mercadopago'])->get();
+        $data_values = Setting::whereIn('settings_type', ['payment_config'])->whereIn('key_name', ['ssl_commerz', 'paypal', 'stripe', 'razor_pay', 'senang_pay', 'paytabs', 'paystack', 'paymob_accept', 'paytm', 'flutterwave', 'liqpay', 'bkash', 'mercadopago', 'wave'])->get();
 
         return view('admin-views.business-settings.payment-index', compact('published_status', 'payment_url', 'data_values'));
     }
@@ -1111,6 +1111,16 @@ class BusinessSettingsController extends Controller
                 ]),
                 'updated_at' => now(),
             ]);
+        } elseif ($name == 'wave') {
+            Helpers::businessUpdateOrInsert(['key' => 'wave'], [
+                'value' => json_encode([
+                    'status' => $request['status'],
+                    'mode' => $request['mode'],
+                    'api_key' => $request['api_key'],
+                    'business_name' => $request['business_name'],
+                ]),
+                'updated_at' => now(),
+            ]);
         } elseif ($name == 'paytabs') {
             Helpers::businessUpdateOrInsert(['key' => 'paytabs'], [
                 'value' => json_encode([
@@ -1184,7 +1194,7 @@ class BusinessSettingsController extends Controller
         $request['status'] = $request->status ?? 0;
 
         $validation = [
-            'gateway' => 'required|in:ssl_commerz,paypal,stripe,razor_pay,senang_pay,paytabs,paystack,paymob_accept,paytm,flutterwave,liqpay,bkash,mercadopago',
+            'gateway' => 'required|in:ssl_commerz,paypal,stripe,razor_pay,senang_pay,paytabs,paystack,paymob_accept,paytm,flutterwave,liqpay,bkash,mercadopago,wave',
             'mode' => 'required|in:live,test',
         ];
 
@@ -1277,6 +1287,13 @@ class BusinessSettingsController extends Controller
                 'app_secret' => 'required_if:status,1',
                 'username' => 'required_if:status,1',
                 'password' => 'required_if:status,1',
+            ];
+        } elseif ($request['gateway'] == 'wave') {
+            $additional_data = [
+                'status' => 'required|in:1,0',
+                'mode' => 'required_if:status,1|in:test,live',
+                'api_key' => 'required_if:status,1',
+                'business_name' => 'required_if:status,1'
             ];
         }
 

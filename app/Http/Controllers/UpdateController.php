@@ -256,7 +256,8 @@ class UpdateController extends Controller
                 'liqpay',
                 'paytm',
                 'bkash',
-                'paytabs'];
+                'paytabs',
+                'wave'];
 
             $data = BusinessSetting::whereIn('key', $gateway)->pluck('value', 'key')->toArray();
 

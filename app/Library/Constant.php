@@ -15,6 +15,7 @@ const GATEWAYS_PAYMENT_METHODS = [
     ['key' => 'liqpay', 'value' => 'Liq Pay'],
     ['key' => 'mercadopago', 'value' => 'Mercadopago'],
     ['key' => 'bkash', 'value' => 'Bkash'],
+    ['key' => 'wave', 'value' => 'Wave'],
     ['key' => 'fatoorah', 'value' => 'Fatoorah'],
     ['key' => 'xendit', 'value' => 'Xendit'],
     ['key' => 'amazon_pay', 'value' => 'Amazon Pay'],
