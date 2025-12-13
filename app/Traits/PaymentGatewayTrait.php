@@ -284,6 +284,12 @@ trait PaymentGatewayTrait
                 "RON" => "Romanian Leu",
                 "PLN" => "Polish Zloty"
             ],
+            "wave" => [
+                "XOF" => "West African CFA Franc",
+                "EUR" => "Euro",
+                "USD" => "United States Dollar",
+                "GBP" => "Pound Sterling"
+            ],
             "worldpay" => [
                 "GBP" => "Pound Sterling",
                 "USD" => "United States Dollar",
