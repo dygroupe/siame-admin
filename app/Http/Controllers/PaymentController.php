@@ -97,6 +97,35 @@ class PaymentController extends Controller
             return response()->json(['errors' => ['message' => 'Payment not found']], 403);
         }
 
+        // Validation de la méthode de paiement
+        // Orange Money est supporté via le trait Payment (route: payment/orange-money/pay)
+        $valid_payment_methods = [
+            'ssl_commerz', 'stripe', 'paypal', 'paymob_accept', 'flutterwave', 
+            'paytm', 'paytabs', 'liqpay', 'razor_pay', 'senang_pay', 
+            'mercadopago', 'bkash', 'paystack', 'wave', 'orange_money',
+            'fatoorah', 'xendit', 'amazon_pay', 'iyzi_pay', 'hyper_pay',
+            'foloosi', 'ccavenue', 'pvit', 'moncash', 'thawani', 'tap',
+            'viva_wallet', 'hubtel', 'maxicash', 'esewa', 'swish', 'momo',
+            'payfast', 'worldpay', 'sixcash', 'phonepe', 'cashfree', 'instamojo'
+        ];
+
+        if (!in_array($request->payment_method, $valid_payment_methods)) {
+            return response()->json(['errors' => ['message' => 'Invalid payment method']], 403);
+        }
+
+        // Validation spécifique pour Orange Money : vérifier que la devise est XOF
+        if ($request->payment_method === 'orange_money') {
+            $currency = BusinessSetting::where(['key' => 'currency'])->first()->value;
+            if (strtoupper($currency) !== 'XOF') {
+                return response()->json([
+                    'errors' => [
+                        'code' => 'currency_not_supported',
+                        'message' => 'Orange Money only supports XOF currency. Current currency: ' . $currency
+                    ]
+                ], 403);
+            }
+        }
+
         $payer = new Payer($customer['first_name'].' '.$customer['last_name'], $customer['email'], $customer['phone'], '');
 
         $currency=BusinessSetting::where(['key'=>'currency'])->first()->value;
