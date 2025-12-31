@@ -825,7 +825,7 @@ class BusinessSettingsController extends Controller
                 }
             }
         }
-        $data_values = Setting::whereIn('settings_type', ['payment_config'])->whereIn('key_name', ['ssl_commerz', 'paypal', 'stripe', 'razor_pay', 'senang_pay', 'paytabs', 'paystack', 'paymob_accept', 'paytm', 'flutterwave', 'liqpay', 'bkash', 'mercadopago', 'wave'])->get();
+        $data_values = Setting::whereIn('settings_type', ['payment_config'])->whereIn('key_name', ['ssl_commerz', 'paypal', 'stripe', 'razor_pay', 'senang_pay', 'paytabs', 'paystack', 'paymob_accept', 'paytm', 'flutterwave', 'liqpay', 'bkash', 'mercadopago', 'wave', 'orange_money'])->get();
 
         return view('admin-views.business-settings.payment-index', compact('published_status', 'payment_url', 'data_values'));
     }
@@ -1121,6 +1121,24 @@ class BusinessSettingsController extends Controller
                 ]),
                 'updated_at' => now(),
             ]);
+        } elseif ($name == 'orange_money') {
+            // Configuration Orange Money
+            // client_id et client_secret sont fournis par Orange Money dans l'interface développeur
+            // merchant_code : Code marchand (6 chiffres) - généralement fourni dans le contrat/fiche d'identification
+            // api_key : Optionnel - peut être fourni par Orange Money si nécessaire
+            // merchant_name : Nom du marchand (optionnel, par défaut: SIAME)
+            Helpers::businessUpdateOrInsert(['key' => 'orange_money'], [
+                'value' => json_encode([
+                    'status' => $request['status'],
+                    'mode' => $request['mode'],
+                    'client_id' => $request['client_id'],
+                    'client_secret' => $request['client_secret'],
+                    'merchant_code' => $request['merchant_code'] ?? '', // Optionnel mais requis pour générer QR Code
+                    'api_key' => $request['api_key'] ?? '', // Optionnel
+                    'merchant_name' => $request['merchant_name'] ?? 'SIAME',
+                ]),
+                'updated_at' => now(),
+            ]);
         } elseif ($name == 'paytabs') {
             Helpers::businessUpdateOrInsert(['key' => 'paytabs'], [
                 'value' => json_encode([
@@ -1194,7 +1212,7 @@ class BusinessSettingsController extends Controller
         $request['status'] = $request->status ?? 0;
 
         $validation = [
-            'gateway' => 'required|in:ssl_commerz,paypal,stripe,razor_pay,senang_pay,paytabs,paystack,paymob_accept,paytm,flutterwave,liqpay,bkash,mercadopago,wave',
+            'gateway' => 'required|in:ssl_commerz,paypal,stripe,razor_pay,senang_pay,paytabs,paystack,paymob_accept,paytm,flutterwave,liqpay,bkash,mercadopago,wave,orange_money',
             'mode' => 'required|in:live,test',
         ];
 
@@ -1294,6 +1312,16 @@ class BusinessSettingsController extends Controller
                 'mode' => 'required_if:status,1|in:test,live',
                 'api_key' => 'required_if:status,1',
                 'business_name' => 'required_if:status,1'
+            ];
+        } elseif ($request['gateway'] == 'orange_money') {
+            $additional_data = [
+                'status' => 'required|in:1,0',
+                'mode' => 'required_if:status,1|in:test,live',
+                'client_id' => 'required_if:status,1',
+                'client_secret' => 'required_if:status,1',
+                'merchant_code' => 'nullable', // Optionnel - peut être fourni dans le contrat
+                'api_key' => 'nullable', // Optionnel selon la documentation
+                'merchant_name' => 'nullable'
             ];
         }
 

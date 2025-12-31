@@ -290,6 +290,9 @@ trait PaymentGatewayTrait
                 "USD" => "United States Dollar",
                 "GBP" => "Pound Sterling"
             ],
+            "orange_money" => [
+                "XOF" => "West African CFA Franc"
+            ],
             "worldpay" => [
                 "GBP" => "Pound Sterling",
                 "USD" => "United States Dollar",

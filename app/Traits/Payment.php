@@ -51,6 +51,7 @@ trait Payment
             'bkash' => 'payment/bkash/make-payment',
             'paystack' => 'payment/paystack/pay',
             'wave' => 'payment/wave/pay',
+            'orange_money' => 'payment/orange-money/pay',
             'fatoorah' => 'payment/fatoorah/pay',
             'xendit' => 'payment/xendit/pay',
             'amazon_pay' => 'payment/amazon/pay',

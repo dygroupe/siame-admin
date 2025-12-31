@@ -257,7 +257,8 @@ class UpdateController extends Controller
                 'paytm',
                 'bkash',
                 'paytabs',
-                'wave'];
+                'wave',
+                'orange_money'];
 
             $data = BusinessSetting::whereIn('key', $gateway)->pluck('value', 'key')->toArray();
 
@@ -361,6 +362,15 @@ class UpdateController extends Controller
                         'app_secret' => $decoded_value['api_secret'],
                         'username' => $decoded_value['username'],
                         'password' => $decoded_value['password'],
+                    ];
+                } elseif ($gateway == 'orange_money') {
+                    $additional_data = [
+                        'status' => $decoded_value['status'],
+                        'client_id' => $decoded_value['client_id'] ?? null,
+                        'client_secret' => $decoded_value['client_secret'] ?? null,
+                        'merchant_code' => $decoded_value['merchant_code'] ?? null,
+                        'api_key' => $decoded_value['api_key'] ?? null,
+                        'merchant_name' => $decoded_value['merchant_name'] ?? 'SIAME',
                     ];
                 }
 

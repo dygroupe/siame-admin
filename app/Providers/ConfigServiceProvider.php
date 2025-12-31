@@ -61,9 +61,25 @@ class ConfigServiceProvider extends ServiceProvider
                     'ssl_commerz',
                     'paystack',
                     'wave',
+                    'orange_money',
                 ];
 
             $data = Setting::whereIn('key_name', $gateway)->pluck('live_values', 'key_name')->toArray();
+            
+            // Configuration Orange Money
+            if (data_get($data, 'orange_money', null)) {
+                $config = [
+                    'client_id' => data_get($data, 'orange_money.client_id', null),
+                    'client_secret' => data_get($data, 'orange_money.client_secret', null),
+                    'merchant_code' => data_get($data, 'orange_money.merchant_code', null),
+                    'api_key' => data_get($data, 'orange_money.api_key', null),
+                    'merchant_name' => data_get($data, 'orange_money.merchant_name', 'SIAME'),
+                    'base_url' => data_get($data, 'orange_money.mode', 'test') == 'live' 
+                        ? 'https://api.orange-sonatel.com' 
+                        : 'https://api.sandbox.orange-sonatel.com',
+                ];
+                Config::set('orange_money', $config);
+            }
             if (isset($data['paystack'])) {
                 $config = [
                     'publicKey' => env('PAYSTACK_PUBLIC_KEY', data_get($data, 'paystack.public_key', null)),

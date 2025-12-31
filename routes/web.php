@@ -16,6 +16,7 @@ use App\Http\Controllers\PaypalPaymentController;
 use App\Http\Controllers\StripePaymentController;
 use App\Http\Controllers\SslCommerzPaymentController;
 use App\Http\Controllers\WaveController;
+use App\Http\Controllers\OrangeMoneyController;
 use Illuminate\Support\Facades\Http;
 
 /*
@@ -172,6 +173,14 @@ if (!$is_published) {
             Route::get('pay', [WaveController::class, 'initialize'])->name('pay');
             Route::get('callback', [WaveController::class, 'callback'])->name('callback');
             Route::post('webhook', [WaveController::class, 'webhook'])->name('webhook')->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
+        });
+
+        //ORANGE MONEY
+        Route::group(['prefix' => 'orange-money', 'as' => 'orange_money.'], function () {
+            Route::get('pay', [\App\Http\Controllers\OrangeMoneyController::class, 'initialize'])->name('pay');
+            Route::get('callback', [\App\Http\Controllers\OrangeMoneyController::class, 'callback'])->name('callback');
+            Route::get('choose-payment', [\App\Http\Controllers\OrangeMoneyController::class, 'choosePaymentMethod'])->name('choose_payment');
+            Route::post('webhook', [\App\Http\Controllers\OrangeMoneyController::class, 'webhook'])->name('webhook')->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
         });
 
         //Liqpay

@@ -16,6 +16,7 @@ const GATEWAYS_PAYMENT_METHODS = [
     ['key' => 'mercadopago', 'value' => 'Mercadopago'],
     ['key' => 'bkash', 'value' => 'Bkash'],
     ['key' => 'wave', 'value' => 'Wave'],
+    ['key' => 'orange_money', 'value' => 'Orange Money'],
     ['key' => 'fatoorah', 'value' => 'Fatoorah'],
     ['key' => 'xendit', 'value' => 'Xendit'],
     ['key' => 'amazon_pay', 'value' => 'Amazon Pay'],
