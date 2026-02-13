@@ -338,6 +338,16 @@ class WaveController extends Controller
                 return response()->json(['success' => false, 'message' => 'Paiement non trouvé'], 404);
             }
 
+            // Wave ne renvoie pas toujours session_id dans l'URL de redirection success_url.
+            // On utilise l'ID de session enregistré à la création du checkout (transaction_id).
+            if ($status === 'successful' && empty($session_id) && !empty($payment_data->transaction_id)) {
+                $session_id = $payment_data->transaction_id;
+                Log::info('Wave: session_id récupéré depuis transaction_id (payment_data)', [
+                    'payment_id' => $payment_id,
+                    'session_id' => $session_id
+                ]);
+            }
+
             if ($status === 'successful' && $session_id) {
                 // Vérification du paiement avec l'API Wave
                 $verification_response = $this->verifyPayment($session_id);
@@ -411,7 +421,8 @@ class WaveController extends Controller
                     return $this->payment_response($payment_data, 'fail');
                 }
             } else {
-                // Paiement annulé ou échoué
+                // Paiement annulé ou échoué (cancelled = annulation utilisateur, autre = échec)
+                $redirect_flag = ($status === 'cancelled') ? 'cancel' : 'fail';
                 Log::info('Wave: Paiement annulé ou échoué', [
                     'payment_id' => $payment_id,
                     'status' => $status
@@ -438,8 +449,8 @@ class WaveController extends Controller
                     }
                 }
 
-                // Redirection selon la plateforme (mobile ou web)
-                return $this->payment_response($payment_data, 'fail');
+                // Redirection selon la plateforme (mobile = deep link siame://, web = payment-fail/cancel)
+                return $this->payment_response($payment_data, $redirect_flag);
             }
 
         } catch (Exception $e) {

@@ -88,9 +88,61 @@ trait  Processor
     {
         $payment_info = PaymentRequest::find($payment_info->id);
         $token_string = 'payment_method=' . $payment_info->payment_method . '&&attribute_id=' . $payment_info->attribute_id . '&&transaction_reference=' . $payment_info->transaction_id;
+
+        // App mobile (Siame) : redirection vers le deep link siame://payment
+        if ($payment_info->payment_platform === 'app') {
+            $deepLink = $this->buildSiamePaymentDeepLink($payment_info, $payment_flag);
+            if ($deepLink !== null) {
+                return redirect()->away($deepLink);
+            }
+            // Fallback : si pas de deep link (ex. attribute_id manquant), utiliser external_redirect_link ou page web
+        }
+
         if (in_array($payment_info->payment_platform, ['web', 'app']) && $payment_info['external_redirect_link'] != null) {
             return redirect($payment_info['external_redirect_link'] . '?flag=' . $payment_flag . '&&token=' . base64_encode($token_string));
         }
         return redirect()->route('payment-' . $payment_flag, ['token' => base64_encode($token_string)]);
+    }
+
+    /**
+     * Construit l'URL de deep link pour l'app Siame après paiement (Wave, Orange Money, etc.).
+     * Format : siame://payment?status=STATUS&order_id=ORDER_ID&contact_number=NUMBER&guest_id=GUEST_ID&create_account=BOOLEAN
+     */
+    protected function buildSiamePaymentDeepLink(PaymentRequest $payment_info, string $payment_flag): ?string
+    {
+        $status = match ($payment_flag) {
+            'success' => 'success',
+            'fail' => 'failed',
+            'cancel' => 'cancel',
+            default => 'failed',
+        };
+
+        $order_id = $payment_info->attribute_id ?? '';
+        if ($order_id === '' || $order_id === null) {
+            return null;
+        }
+
+        $payer = is_string($payment_info->payer_information)
+            ? json_decode($payment_info->payer_information, true)
+            : (array) $payment_info->payer_information;
+        $additional = is_string($payment_info->additional_data)
+            ? json_decode($payment_info->additional_data, true)
+            : (array) ($payment_info->additional_data ?? []);
+        // contact_number : priorité à la valeur envoyée par l'app, sinon payer.phone
+        $contact_number = $additional['contact_number'] ?? $payer['phone'] ?? '';
+        $guest_id = $additional['guest_id'] ?? '';
+        $create_account = isset($additional['create_account'])
+            ? ($additional['create_account'] ? 'true' : 'false')
+            : 'false';
+
+        $params = [
+            'status' => $status,
+            'order_id' => $order_id,
+            'contact_number' => $contact_number,
+            'guest_id' => $guest_id,
+            'create_account' => $create_account,
+        ];
+
+        return 'siame://payment?' . http_build_query($params);
     }
 }

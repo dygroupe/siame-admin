@@ -1122,19 +1122,14 @@ class BusinessSettingsController extends Controller
                 'updated_at' => now(),
             ]);
         } elseif ($name == 'orange_money') {
-            // Configuration Orange Money
-            // client_id et client_secret sont fournis par Orange Money dans l'interface développeur
-            // merchant_code : Code marchand (6 chiffres) - généralement fourni dans le contrat/fiche d'identification
-            // api_key : Optionnel - peut être fourni par Orange Money si nécessaire
-            // merchant_name : Nom du marchand (optionnel, par défaut: SIAME)
+            // Configuration Orange Money (client_id, client_secret, merchant_code, merchant_name)
             Helpers::businessUpdateOrInsert(['key' => 'orange_money'], [
                 'value' => json_encode([
                     'status' => $request['status'],
                     'mode' => $request['mode'],
                     'client_id' => $request['client_id'],
                     'client_secret' => $request['client_secret'],
-                    'merchant_code' => $request['merchant_code'] ?? '', // Optionnel mais requis pour générer QR Code
-                    'api_key' => $request['api_key'] ?? '', // Optionnel
+                    'merchant_code' => $request['merchant_code'] ?? '',
                     'merchant_name' => $request['merchant_name'] ?? 'SIAME',
                 ]),
                 'updated_at' => now(),
@@ -1319,8 +1314,7 @@ class BusinessSettingsController extends Controller
                 'mode' => 'required_if:status,1|in:test,live',
                 'client_id' => 'required_if:status,1',
                 'client_secret' => 'required_if:status,1',
-                'merchant_code' => 'nullable', // Optionnel - peut être fourni dans le contrat
-                'api_key' => 'nullable', // Optionnel selon la documentation
+                'merchant_code' => 'nullable',
                 'merchant_name' => 'nullable'
             ];
         }

@@ -178,8 +178,8 @@ if (!$is_published) {
         //ORANGE MONEY
         Route::group(['prefix' => 'orange-money', 'as' => 'orange_money.'], function () {
             Route::get('pay', [\App\Http\Controllers\OrangeMoneyController::class, 'initialize'])->name('pay');
+            Route::get('open-app', [\App\Http\Controllers\OrangeMoneyController::class, 'openApp'])->name('open_app');
             Route::get('callback', [\App\Http\Controllers\OrangeMoneyController::class, 'callback'])->name('callback');
-            Route::get('choose-payment', [\App\Http\Controllers\OrangeMoneyController::class, 'choosePaymentMethod'])->name('choose_payment');
             Route::post('webhook', [\App\Http\Controllers\OrangeMoneyController::class, 'webhook'])->name('webhook')->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
         });
 

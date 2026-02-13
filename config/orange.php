@@ -21,7 +21,14 @@ return [
 
     'business_name' => env('ORANGE_BUSINESS_NAME', 'SIAME'),
 
-    'base_url' => env('ORANGE_BASE_URL', 'https://api.orange.com'),
+    // URL de base de l'API (paiements).
+    // Pour Sonatel Sénégal, la doc officielle indique :
+    //  - Sandbox : https://api.sandbox.orange-sonatel.com
+    //  - Live    : https://api.orange-sonatel.com
+    //
+    // On laisse la valeur par défaut vide pour que le contrôleur applique automatiquement
+    // ces URLs Sonatel. Si vous souhaitez surcharger, définissez ORANGE_BASE_URL dans .env.
+    'base_url' => env('ORANGE_BASE_URL', ''),
 
     'webhook_secret' => env('ORANGE_WEBHOOK_SECRET', ''),
 
@@ -101,7 +108,12 @@ return [
     |--------------------------------------------------------------------------
     */
     'oauth' => [
-        'token_endpoint' => '/oauth/v2/token',
+        // Base URL pour le token (si vide, on utilise base_url ci-dessus). Sonatel peut avoir un FQDN différent.
+        'base_url' => env('ORANGE_OAUTH_BASE_URL', ''),
+        // Orange global: /oauth/v3/token. Sonatel utilise parfois /oauth/v2/token (voir doc ou contrat).
+        'token_endpoint' => env('ORANGE_OAUTH_TOKEN_ENDPOINT', '/oauth/v3/token'),
+        // Endpoint à essayer en secours si "Resource not found" (ex: Sonatel /oauth/v2/token)
+        'token_endpoint_fallback' => env('ORANGE_OAUTH_TOKEN_ENDPOINT_FALLBACK', '/oauth/v2/token'),
         'grant_type' => 'client_credentials',
         'scope' => 'payment'
     ],
@@ -115,7 +127,9 @@ return [
         'payment' => '/orange-money-webpay/v1/payment',
         'verify' => '/orange-money-webpay/v1/payment/{pay_token}',
         'refund' => '/orange-money-webpay/v1/payment/{pay_token}/refund',
-        'status' => '/orange-money-webpay/v1/payment/{pay_token}/status'
+        'status' => '/orange-money-webpay/v1/payment/{pay_token}/status',
+        // API Sonatel createPaymentQRCode (équivalent @sonatel-os/juf) — retourne deepLinks.MAXIT et deepLinks.OM
+        'payment_qrcode' => env('ORANGE_PAYMENT_QRCODE_ENDPOINT', '/api/eWallet/v1/payments/qrcode'),
     ],
 
     /*

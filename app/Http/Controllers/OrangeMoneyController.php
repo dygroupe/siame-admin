@@ -1,4 +1,4 @@
-<?php
+<?php 
 
 namespace App\Http\Controllers;
 
@@ -11,6 +11,8 @@ use App\Models\PaymentRequest;
 use App\Traits\Processor;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Exception;
 
 // Définition des constantes de réponse directement dans le contrôleur
@@ -28,6 +30,17 @@ class OrangeMoneyController extends Controller
 {
     use Processor;
 
+    /**
+     * Sonatel Sénégal.
+     * Base URLs issues de la documentation officielle :
+     *  - Sandbox : https://api.sandbox.orange-sonatel.com
+     *  - Live    : https://api.orange-sonatel.com
+     */
+    private const OM_LIVE_BASE_URL = 'https://api.orange-sonatel.com';
+    private const OM_SANDBOX_BASE_URL = 'https://api.sandbox.orange-sonatel.com';
+    /** Endpoint QR Code eWallet v4 (cf. doc /api/eWallet/v4/qrcode). */
+    private const OM_QRCODE_ENDPOINT = '/api/eWallet/v4/qrcode';
+
     private $config_values;
     private PaymentRequest $payment;
     private $user;
@@ -36,36 +49,46 @@ class OrangeMoneyController extends Controller
     private $client_id;
     private $client_secret;
     private $merchant_code;
-    private $api_key;
 
     public function __construct(PaymentRequest $payment, User $user)
     {
         try {
             $config = $this->payment_config('orange_money', 'payment_config');
-            
-            if (!is_null($config) && $config->mode == 'live') {
+
+            // Récupération des valeurs de configuration (priorité : table payment_config puis config/orange.php)
+            if (!is_null($config) && $config->mode === 'live') {
                 $this->config_values = json_decode($config->live_values, true);
-                $this->base_url = 'https://api.orange-sonatel.com';
-            } elseif (!is_null($config) && $config->mode == 'test') {
+            } elseif (!is_null($config) && $config->mode === 'test') {
                 $this->config_values = json_decode($config->test_values, true);
-                $this->base_url = 'https://api.sandbox.orange-sonatel.com';
             } else {
-                // Configuration par défaut si pas de config en base
                 $this->config_values = [
-                    'client_id' => config('orange_money.client_id', ''),
-                    'client_secret' => config('orange_money.client_secret', ''),
-                    'merchant_code' => config('orange_money.merchant_code', ''),
-                    'api_key' => config('orange_money.api_key', ''),
-                    'merchant_name' => config('orange_money.merchant_name', 'SIAME')
+                    'client_id' => config('orange.client_id', ''),
+                    'client_secret' => config('orange.client_secret', ''),
+                    'merchant_code' => config('orange.merchant_id', ''),
+                    'merchant_name' => config('orange.business_name', 'SIAME'),
                 ];
-                $this->base_url = config('orange_money.base_url', 'https://api.sandbox.orange-sonatel.com');
             }
 
-            // Extraction des valeurs de configuration
-            $this->client_id = $this->config_values['client_id'] ?? '';
-            $this->client_secret = $this->config_values['client_secret'] ?? '';
-            $this->merchant_code = $this->config_values['merchant_code'] ?? '';
-            $this->api_key = $this->config_values['api_key'] ?? '';
+            // Détermination du mode (test / live) et de l'URL de base selon la documentation Sonatel
+            $mode = $config->mode ?? config('orange.mode', 'test');
+            // On ne lit l'override que depuis l'ENV pour éviter que la valeur par défaut
+            // de config/orange.php ("") force api.orange.com.
+            $configuredBaseUrl = env('ORANGE_BASE_URL');
+
+            if (!empty($configuredBaseUrl)) {
+                // Si l'URL est définie dans l'env, on la respecte (permet de surcharger sandbox/live)
+                $this->base_url = rtrim($configuredBaseUrl, '/');
+            } else {
+                // Sinon on applique strictement la doc Sonatel : sandbox ou live
+                $this->base_url = $mode === 'live'
+                    ? self::OM_LIVE_BASE_URL
+                    : self::OM_SANDBOX_BASE_URL;
+            }
+
+            // Extraction des valeurs de configuration (trim pour éviter espaces en copier-coller)
+            $this->client_id = trim((string) ($this->config_values['client_id'] ?? ''));
+            $this->client_secret = trim((string) ($this->config_values['client_secret'] ?? ''));
+            $this->merchant_code = trim((string) ($this->config_values['merchant_code'] ?? ''));
 
             // Vérification des clés API requises
             if (empty($this->client_id) || empty($this->client_secret)) {
@@ -79,61 +102,86 @@ class OrangeMoneyController extends Controller
         } catch (Exception $e) {
             // Configuration par défaut en cas d'erreur de base
             $this->config_values = [
-                'client_id' => config('orange_money.client_id', ''),
-                'client_secret' => config('orange_money.client_secret', ''),
-                'merchant_code' => config('orange_money.merchant_code', ''),
-                'api_key' => config('orange_money.api_key', ''),
-                'merchant_name' => config('orange_money.merchant_name', 'SIAME')
+                'client_id' => config('orange.client_id', ''),
+                'client_secret' => config('orange.client_secret', ''),
+                'merchant_code' => config('orange.merchant_id', ''),
+                'merchant_name' => config('orange.business_name', 'SIAME'),
             ];
-            $this->base_url = config('orange_money.base_url', 'https://api.sandbox.orange-sonatel.com');
+
+            $configuredBaseUrl = env('ORANGE_BASE_URL');
+            $mode = config('orange.mode', 'test');
+            $this->base_url = !empty($configuredBaseUrl)
+                ? rtrim($configuredBaseUrl, '/')
+                : ($mode === 'live' ? self::OM_LIVE_BASE_URL : self::OM_SANDBOX_BASE_URL);
+            $this->client_id = trim((string) ($this->config_values['client_id'] ?? ''));
+            $this->client_secret = trim((string) ($this->config_values['client_secret'] ?? ''));
+            $this->merchant_code = trim((string) ($this->config_values['merchant_code'] ?? ''));
         }
 
         $this->payment = $payment;
         $this->user = $user;
 
         // Log de la configuration pour débogage
-        Log::info('Orange Money: Configuration initialisée', [
-            'mode' => $this->config_values['mode'] ?? 'test',
-            'base_url' => $this->base_url,
-            'merchant_code' => substr($this->merchant_code, 0, 3) . '...'
-        ]);
+            Log::info('Orange Money: Configuration initialisée', [
+                'mode' => $mode ?? 'test',
+                'base_url' => $this->base_url,
+                'merchant_code' => substr($this->merchant_code, 0, 3) . '...',
+            ]);
     }
 
     /**
-     * Obtient un access token via OAuth 2.0
-     * Selon la documentation : POST /oauth/v1/token
+     * Obtient un access token Sonatel (form body client_id / client_secret).
+     * Cf. doc : POST {base_url}/oauth/v1/token
      */
     private function getAccessToken()
     {
         try {
-            // Si on a déjà un token valide en cache, le réutiliser
-            $cache_key = 'orange_money_access_token_' . md5($this->client_id);
-            $cached_token = cache()->get($cache_key);
-            
-            if ($cached_token && isset($cached_token['token']) && isset($cached_token['expires_at'])) {
-                if (now()->timestamp < $cached_token['expires_at']) {
-                    return $cached_token['token'];
-                }
+            if (empty($this->client_id) || empty($this->client_secret)) {
+                Log::error('Orange Money: client_id ou client_secret manquant');
+                throw new Exception('Identifiants Orange Money non configurés (client_id / client_secret).');
             }
 
-            // Obtenir un nouveau token
-            $endpoint = '/oauth/v1/token';
-            $full_url = $this->base_url . $endpoint;
+            $cache_key = 'orange_money_access_token_' . md5($this->client_id);
+            $cached_token = cache()->get($cache_key);
+            if ($cached_token && isset($cached_token['token']) && isset($cached_token['expires_at']) && now()->timestamp < $cached_token['expires_at']) {
+                return $cached_token['token'];
+            }
+
+            // URL du token strictement conforme à la documentation :
+            //  - Sandbox : https://api.sandbox.orange-sonatel.com/oauth/v1/token
+            //  - Live    : https://api.orange-sonatel.com/oauth/v1/token
+            $tokenUrl = rtrim($this->base_url, '/') . '/oauth/v1/token';
 
             $response = Http::asForm()
                 ->timeout(30)
-                ->post($full_url, [
+                ->post($tokenUrl, [
                     'client_id' => $this->client_id,
+                    'grant_type' => 'client_credentials',
                     'client_secret' => $this->client_secret,
-                    'grant_type' => 'client_credentials'
                 ]);
 
             if (!$response->successful()) {
+                $body = $response->json();
+                $apiError = trim(($body['error'] ?? '') . ' ' . ($body['error_description'] ?? '')) ?: $response->body();
+                if (is_array($body) && isset($body['description'])) {
+                    $apiError = trim(($body['message'] ?? '') . ' - ' . ($body['description'] ?? ''));
+                }
+                if (is_array($body) && (isset($body['code']) && (int) $body['code'] === 60)) {
+                    $apiError = 'Resource not found. URL appelée: ' . $tokenUrl;
+                }
+                // Identifiants refusés (invalid_client) : souvent credentials Sonatel utilisés sur api.orange.com
+                $isInvalidClient = $response->status() === 401 && (isset($body['error']) && $body['error'] === 'invalid_client');
+                if ($isInvalidClient) {
+                    cache()->forget($cache_key);
+                    $apiError = 'Identifiants refusés (invalid_client). Vérifiez client_id et client_secret (admin Orange Money). URL: ' . $tokenUrl;
+                }
                 Log::error('Orange Money: Erreur lors de l\'obtention du token', [
                     'status_code' => $response->status(),
-                    'response' => $response->body()
+                    'url_called' => $tokenUrl,
+                    'response' => $response->body(),
+                    'api_error' => $apiError,
                 ]);
-                throw new Exception('Impossible d\'obtenir le token d\'accès');
+                throw new Exception('Impossible d\'obtenir le token d\'accès. ' . $apiError);
             }
 
             $token_data = $response->json();
@@ -242,27 +290,21 @@ class OrangeMoneyController extends Controller
                 ), 400);
             }
 
-            // Le merchant_code peut être obtenu via l'API ou configuré manuellement
-            // Si non fourni, on essaie de le récupérer via l'API ou on utilise une valeur par défaut
+            // Le merchant_code doit être fourni dans le contrat Sonatel et configuré en base/config
+            // Il n'existe AUCUN endpoint Sonatel pour récupérer le merchant code dynamiquement
             $merchant_code = $this->merchant_code;
             if (empty($merchant_code)) {
-                // Essayer de récupérer le merchant code via l'API ou utiliser une valeur par défaut
-                // Note: Le merchant code devrait être fourni dans votre contrat Orange Money
-                Log::warning('Orange Money: Code marchand non configuré, tentative de récupération via API');
-                $merchant_code = $this->getMerchantCodeFromAPI();
-                
-                if (empty($merchant_code)) {
-                    Log::error('Orange Money: Code marchand manquant - Veuillez le configurer dans les paramètres');
-                    return response()->json($this->response_formatter(
-                        GATEWAYS_DEFAULT_400,
-                        null,
-                        'Code marchand non configuré. Veuillez le configurer dans les paramètres Orange Money.'
-                    ), 400);
-                }
+                Log::error('Orange Money: Merchant code non configuré (doit être fourni par Sonatel dans le contrat)');
+                return response()->json($this->response_formatter(
+                    GATEWAYS_DEFAULT_400,
+                    null,
+                    'Merchant code Orange Money non configuré. Veuillez le configurer dans les paramètres (fourni par Sonatel dans votre contrat).'
+                ), 400);
             }
 
-            // Génération d'une référence unique
-            $reference = 'PAYMENT_' . $payment_data->id . '_' . time();
+            // Génération d'une référence unique Sonatel-safe (courte, sans caractères spéciaux)
+            // Format recommandé: préfixe + UUID ou timestamp + random pour éviter collisions
+            $reference = 'PMT' . strtoupper(str_replace('-', '', Str::uuid()->toString()));
 
             // Préparation de la requête QR Code selon la documentation
             $qr_request = [
@@ -287,33 +329,121 @@ class OrangeMoneyController extends Controller
                 'merchant_code' => substr($merchant_code, 0, 3) . '...'
             ]);
 
-            // Détection des applications installées (Max It et/ou Orange Money)
-            $appDetection = $this->detectOrangeMoneyApps($request);
+            // Appel API Sonatel createPaymentQRCode pour obtenir les deepLinks officiels (MAXIT, OM)
+            $apiResult = $this->createPaymentQRCodeViaApi($qr_request, $reference, $payment_data->id);
 
-            Log::info('Orange Money: Détection des applications', [
-                'payment_id' => $payment_data->id,
-                'has_max_it' => $appDetection['has_max_it'],
-                'has_orange_money' => $appDetection['has_orange_money'],
-                'preferred_app' => $appDetection['preferred_app'],
-                'user_agent' => $request->header('User-Agent', ''),
-                'platform' => $request->header('X-Platform', 'web')
-            ]);
-
-            // Vérifier qu'au moins une application est détectée
-            if (!$appDetection['has_max_it'] && !$appDetection['has_orange_money']) {
-                Log::warning('Orange Money: Aucune application détectée', [
-                    'payment_id' => $payment_data->id
+            // Si l'API échoue, on retourne une erreur (pas de fallback manuel - conforme Sonatel)
+            if (empty($apiResult['success']) || empty($apiResult['deepLinks'])) {
+                Log::error('Orange Money: Échec de createPaymentQRCode - pas de fallback autorisé', [
+                    'payment_id' => $payment_data->id,
+                    'api_error' => $apiResult['error'] ?? 'Aucun deepLink retourné',
                 ]);
-                
+
                 return response()->json($this->response_formatter(
                     GATEWAYS_DEFAULT_400,
                     null,
-                    'Aucune application de paiement détectée. Veuillez installer Max It ou Orange Money pour effectuer le paiement.'
+                    'Impossible de créer le paiement Orange Money. ' . ($apiResult['error'] ?? 'Service temporairement indisponible')
                 ), 400);
             }
 
-            // Génération des DeepLinks pour les applications détectées
-            return $this->generatePaymentDeepLinks($qr_request, $payment_data, $reference, $merchant_code, $appDetection);
+            // Mise à jour du paiement avec la référence/qrId
+            $transaction_id = $apiResult['qrId'] ?? $reference;
+            $this->payment::where(['id' => $payment_data->id])->update([
+                'transaction_id' => $transaction_id,
+                'payment_method' => 'orange_money',
+            ]);
+
+            // Stocker les données en session pour le callback
+            session([
+                'orange_money_reference' => $reference,
+                'orange_money_payment_id' => $payment_data->id,
+                'orange_money_amount' => $qr_request['amount']['value'],
+                'orange_money_merchant_code' => $merchant_code,
+                'orange_money_business_name' => $qr_request['name'],
+            ]);
+
+            // Liens retournés par l'API Sonatel eWallet v4.
+            // Selon le comportement observé, le shortLink HTTPS (SuGu) est souvent le plus fiable côté Max It.
+            $shortLink = $apiResult['shortLink'] ?? null;
+            $maxitLink = $apiResult['deepLinks']['MAXIT'] ?? null;
+            $omLink = $apiResult['deepLinks']['OM'] ?? null;
+            $genericDeepLink = $apiResult['deepLink'] ?? null;
+
+            // Lien "principal" côté client : shortLink > MAXIT > OM > deepLink générique
+            $primaryLink = $shortLink ?? $maxitLink ?? $omLink ?? $genericDeepLink;
+
+            // Pour la page de choix, on propose Max It (shortLink en priorité) et OM.
+            $maxitForWeb = $shortLink ?? $maxitLink ?? $genericDeepLink;
+
+            Log::info('Orange Money: Paiement initialisé avec succès', [
+                'payment_id' => $payment_data->id,
+                'qrId' => $transaction_id,
+                'has_maxit_deeplink' => !empty($maxitLink) || !empty($shortLink),
+                'has_om_deeplink' => !empty($omLink),
+                'maxit_deeplink_sample' => $maxitForWeb ? substr($maxitForWeb, 0, 80) . (strlen($maxitForWeb) > 80 ? '...' : '') : null,
+                'om_deeplink_sample' => $omLink ? substr($omLink, 0, 80) . (strlen($omLink) > 80 ? '...' : '') : null,
+                'shortlink_sample' => !empty($shortLink) ? substr($shortLink, 0, 100) . (strlen($shortLink) > 100 ? '...' : '') : null,
+            ]);
+
+            // 1) Appels API / mobile (Flutter, etc.) : renvoyer les 2 liens + une URL web "open-app" (page de choix)
+            if ($request->expectsJson() || $request->wantsJson()) {
+                $openAppParams = [];
+                if (!empty($maxitForWeb)) {
+                    // base64url (URL-safe) pour éviter que '+' devienne un espace dans la query string
+                    $openAppParams['maxit'] = rtrim(strtr(base64_encode($maxitForWeb), '+/', '-_'), '=');
+                }
+                if (!empty($omLink)) {
+                    $openAppParams['om'] = rtrim(strtr(base64_encode($omLink), '+/', '-_'), '=');
+                }
+                $openAppUrl = !empty($openAppParams) ? route('orange_money.open_app', $openAppParams) : null;
+
+                return response()->json([
+                    'success' => true,
+                    'payment_id' => $payment_data->id,
+                    'reference' => $reference,
+                    'qr_id' => $transaction_id,
+                    'qr_code' => $apiResult['qrCode'] ?? null,
+                    'deep_links' => [
+                        'maxit' => $maxitLink,
+                        'orange_money' => $omLink,
+                    ],
+                    'deep_link' => $primaryLink,
+                    'short_link' => $shortLink,
+                    'open_app_url' => $openAppUrl,
+                    'expires_in' => $apiResult['validity'] ?? 900,
+                    'metadata' => $apiResult['metadata'] ?? null,
+                ], 200);
+            }
+
+            // 2) Navigation navigateur : rediriger vers la page de choix (open-app)
+            if (!empty($maxitForWeb) || !empty($omLink)) {
+                $params = [];
+                if (!empty($maxitForWeb)) {
+                    $params['maxit'] = rtrim(strtr(base64_encode($maxitForWeb), '+/', '-_'), '=');
+                }
+                if (!empty($omLink)) {
+                    $params['om'] = rtrim(strtr(base64_encode($omLink), '+/', '-_'), '=');
+                }
+                return redirect()->route('orange_money.open_app', $params);
+            }
+
+            // Fallback : aucun lien exploitable
+            return response()->json([
+                'success' => true,
+                'payment_id' => $payment_data->id,
+                'reference' => $reference,
+                'qr_id' => $transaction_id,
+                'qr_code' => $apiResult['qrCode'] ?? null,
+                'deep_links' => [
+                    'maxit' => $maxitLink,
+                    'orange_money' => $omLink,
+                ],
+                'deep_link' => $primaryLink,
+                'short_link' => $shortLink,
+                'open_app_url' => null,
+                'expires_in' => $apiResult['validity'] ?? 900,
+                'metadata' => $apiResult['metadata'] ?? null,
+            ], 200);
 
         } catch (Exception $e) {
             Log::error('Orange Money: Erreur lors de l\'initialisation', [
@@ -329,479 +459,194 @@ class OrangeMoneyController extends Controller
         }
     }
 
-    /**
-     * Récupère le code marchand via l'API Orange Money
-     * Si disponible dans les informations du compte
-     */
-    private function getMerchantCodeFromAPI()
-    {
-        try {
-            // Note: Selon la documentation, il n'y a pas d'endpoint direct pour récupérer le merchant code
-            // Le merchant code est généralement fourni dans le contrat/fiche d'identification
-            // On retourne null pour forcer la configuration manuelle
-            return null;
-        } catch (Exception $e) {
-            Log::error('Orange Money: Erreur lors de la récupération du merchant code', [
-                'error' => $e->getMessage()
-            ]);
-            return null;
-        }
-    }
+    /** Package Android officiel Max It Sénégal (Google Play). */
+    private const MAXIT_ANDROID_PACKAGE = 'com.orange.myorange.osn';
 
     /**
-     * Détecte si l'utilisateur a Max It et/ou Orange Money installées
-     * Retourne un tableau avec les informations de détection
-     * Priorité : Max It > Orange Money (si les deux sont installées)
+     * Page intermédiaire avec liens cliquables pour ouvrir Max It ou Orange Money.
+     * Max It : utilise le shortLink Sonatel (HTTPS) en priorité — il redirige correctement vers l'app
+     * avec le contexte paiement, évitant "Page introuvable". Le deep link sameaosnapp:// converti en
+     * Intent peut corrompre l'URL et faire ouvrir Max It sans les paramètres requis.
      */
-    private function detectOrangeMoneyApps(Request $request)
+    public function openApp(Request $request)
     {
-        $result = [
-            'has_max_it' => false,
-            'has_orange_money' => false,
-            'preferred_app' => null, // 'maxit', 'orangemoney', ou null
-            'detection_method' => 'none'
-        ];
+        $maxitUrl = null;
+        $omUrl = null;
 
-        // Méthode 1: Vérification via paramètres explicites (depuis JavaScript ou app mobile)
-        $has_max_it_param = $request->get('has_max_it', false);
-        $has_orange_money_param = $request->get('has_orange_money', false);
-        
-        if ($has_max_it_param === 'true' || $has_max_it_param === true || $has_max_it_param === '1') {
-            $result['has_max_it'] = true;
-            $result['detection_method'] = 'parameter';
-        }
-        
-        if ($has_orange_money_param === 'true' || $has_orange_money_param === true || $has_orange_money_param === '1') {
-            $result['has_orange_money'] = true;
-            $result['detection_method'] = 'parameter';
-        }
-
-        // Méthode 2: Détection via User-Agent
-        $user_agent = $request->header('User-Agent', '');
-        
-        // Détection Max It
-        if (stripos($user_agent, 'MaxIt') !== false || 
-            stripos($user_agent, 'Max-It') !== false ||
-            stripos($user_agent, 'Maxit') !== false) {
-            $result['has_max_it'] = true;
-            if ($result['detection_method'] === 'none') {
-                $result['detection_method'] = 'user_agent';
+        // 1) Liens passés dans l'URL (base64) : aucun problème de session/cache/multi-serveur
+        $maxitEnc = $request->query('maxit');
+        $omEnc = $request->query('om');
+        if (!empty($maxitEnc)) {
+            // Accepter base64url + corriger le cas où '+' aurait été converti en espace
+            $norm = str_replace(' ', '+', $maxitEnc);
+            $norm = strtr($norm, '-_', '+/');
+            $padLen = 4 - (strlen($norm) % 4);
+            if ($padLen < 4) {
+                $norm .= str_repeat('=', $padLen);
+            }
+            $decoded = base64_decode($norm, true);
+            if ($decoded !== false && preg_match('/^https?:\/\//i', $decoded)) {
+                $maxitUrl = $decoded;
             }
         }
-        
-        // Détection Orange Money (mais pas Max It)
-        if ((stripos($user_agent, 'OrangeMoney') !== false || 
-             stripos($user_agent, 'Orange Money') !== false ||
-             stripos($user_agent, 'Orange-Money') !== false) &&
-            !$result['has_max_it']) {
-            $result['has_orange_money'] = true;
-            if ($result['detection_method'] === 'none') {
-                $result['detection_method'] = 'user_agent';
+        if (!empty($omEnc)) {
+            $norm = str_replace(' ', '+', $omEnc);
+            $norm = strtr($norm, '-_', '+/');
+            $padLen = 4 - (strlen($norm) % 4);
+            if ($padLen < 4) {
+                $norm .= str_repeat('=', $padLen);
+            }
+            $decoded = base64_decode($norm, true);
+            if ($decoded !== false && preg_match('/^https?:\/\//i', $decoded)) {
+                $omUrl = $decoded;
             }
         }
 
-        // Méthode 3: Détection via headers personnalisés (si l'app mobile envoie un header)
-        $x_platform = $request->header('X-Platform', '');
-        $x_app_name = $request->header('X-App-Name', '');
-        $x_user_agent = $request->header('X-User-Agent', '');
-        
-        // Détection Max It via headers
-        if (stripos($x_app_name, 'MaxIt') !== false ||
-            stripos($x_app_name, 'Max-It') !== false ||
-            stripos($x_user_agent, 'MaxIt') !== false) {
-            $result['has_max_it'] = true;
-            if ($result['detection_method'] === 'none') {
-                $result['detection_method'] = 'header';
-            }
-        }
-        
-        // Détection Orange Money via headers (mais pas Max It)
-        if ((stripos($x_app_name, 'OrangeMoney') !== false ||
-             stripos($x_app_name, 'Orange Money') !== false ||
-             stripos($x_user_agent, 'OrangeMoney') !== false) &&
-            !$result['has_max_it']) {
-            $result['has_orange_money'] = true;
-            if ($result['detection_method'] === 'none') {
-                $result['detection_method'] = 'header';
+        // 2) Fallback token (cache) pour compatibilité
+        if (empty($maxitUrl) && empty($omUrl)) {
+            $token = $request->query('token');
+            if (!empty($token)) {
+                $cached = Cache::get('orange_money_open_app_' . $token);
+                if (is_array($cached)) {
+                    $maxitUrl = $cached['maxit'] ?? null;
+                    $omUrl = $cached['om'] ?? null;
+                    Cache::forget('orange_money_open_app_' . $token);
+                }
             }
         }
 
-        // Méthode 4: Détection via session (si déjà détecté précédemment)
-        if (session('has_max_it_app') === true) {
-            $result['has_max_it'] = true;
-            if ($result['detection_method'] === 'none') {
-                $result['detection_method'] = 'session';
-            }
-        }
-        
-        if (session('has_orange_money_app') === true) {
-            $result['has_orange_money'] = true;
-            if ($result['detection_method'] === 'none') {
-                $result['detection_method'] = 'session';
-            }
+        // 3) Fallback session
+        if (empty($maxitUrl) && empty($omUrl)) {
+            $maxitUrl = session('orange_money_open_app_maxit');
+            $omUrl = session('orange_money_open_app_om');
+            session()->forget(['orange_money_open_app_maxit', 'orange_money_open_app_om']);
         }
 
-        // Méthode 5: Détection via cookies (si JavaScript a déjà détecté)
-        if ($request->cookie('has_max_it_app') === 'true') {
-            $result['has_max_it'] = true;
-            if ($result['detection_method'] === 'none') {
-                $result['detection_method'] = 'cookie';
-            }
-        }
-        
-        if ($request->cookie('has_orange_money_app') === 'true') {
-            $result['has_orange_money'] = true;
-            if ($result['detection_method'] === 'none') {
-                $result['detection_method'] = 'cookie';
-            }
+        if (empty($maxitUrl) && empty($omUrl)) {
+            return redirect()->route('orange_money.callback', ['payment_id' => session('orange_money_payment_id'), 'status' => 'cancel'])
+                ->with('error', 'Session expirée. Veuillez relancer le paiement.');
         }
 
-        // Déterminer l'application préférée selon la priorité : Max It > Orange Money
-        if ($result['has_max_it']) {
-            $result['preferred_app'] = 'maxit';
-            session(['has_max_it_app' => true]);
-        } elseif ($result['has_orange_money']) {
-            $result['preferred_app'] = 'orangemoney';
-            session(['has_orange_money_app' => true]);
-        }
-
-        return $result;
-    }
-
-    /**
-     * Génère un DeepLink pour ouvrir Max It ou Orange Money avec les paramètres de paiement
-     */
-    private function generateAppDeepLink($qr_request, $reference, $payment_data, $app_type = 'maxit')
-    {
-        // Schémas de DeepLink possibles pour chaque application
-        $schemes = [
-            'maxit' => [
-                'maxit://payment',
-                'maxit://pay',
-                'maxit://orangemoney/payment',
-                'maxit://orange-money/payment'
-            ],
-            'orangemoney' => [
-                'orangemoney://payment',
-                'orange-money://payment',
-                'orangemoney://pay',
-                'om://payment'
-            ]
-        ];
-
-        // Sélectionner le schéma selon l'application
-        $app_schemes = $schemes[$app_type] ?? $schemes['maxit'];
-        $scheme = $app_schemes[0]; // Utiliser le premier schéma par défaut
-
-        // Paramètres du paiement à passer dans le DeepLink
-        $params = [
-            'merchant_code' => $qr_request['code'],
-            'amount' => $qr_request['amount']['value'],
-            'currency' => $qr_request['amount']['unit'],
-            'reference' => $reference,
-            'merchant_name' => $qr_request['name'],
-            'callback_success' => urlencode($qr_request['callbackSuccessUrl']),
-            'callback_cancel' => urlencode($qr_request['callbackCancelUrl'])
-        ];
-
-        // Construire le DeepLink
-        $query_string = http_build_query($params);
-        $deeplink = $scheme . '?' . $query_string;
-
-        Log::info('Orange Money: DeepLink généré', [
-            'app_type' => $app_type,
-            'scheme' => $scheme,
-            'payment_id' => $payment_data->id,
-            'reference' => $reference
+        return view('payment-views.orange-money-open-app', [
+            'maxit_url' => $maxitUrl,
+            'om_url' => $omUrl,
         ]);
-
-        return $deeplink;
     }
 
     /**
-     * Génère les DeepLinks pour Max It et/ou Orange Money
-     * Ne génère plus de QR Code, uniquement des DeepLinks
+     * Convertit un deep link Max It (sameaosnapp://...) en Intent URL Android.
+     * La WebView/Chrome transmet l'intent au système qui ouvre l'app au lieu d'afficher ERR_UNKNOWN_URL_SCHEME.
+     * IMPORTANT: La query string (qrId, reference, etc.) doit être conservée pour que Max It affiche
+     * la page de paiement préremplie au lieu de "Page introuvable".
      */
-    private function generatePaymentDeepLinks($qr_request, $payment_data, $reference, $merchant_code, $appDetection)
+    private function maxitDeepLinkToAndroidIntent(string $deepLink): string
+    {
+        $parsed = parse_url($deepLink);
+        $path = trim(($parsed['host'] ?? '') . ($parsed['path'] ?? ''), '/');
+        if ($path === '') {
+            return $deepLink;
+        }
+        // Conserver la query string pour transmettre le contexte paiement (qrId, reference, etc.) à Max It
+        if (!empty($parsed['query'])) {
+            $path .= '?' . $parsed['query'];
+        }
+        $fallback = 'https://play.google.com/store/apps/details?id=' . self::MAXIT_ANDROID_PACKAGE;
+        return 'intent://' . $path . '#Intent;scheme=sameaosnapp;package=' . self::MAXIT_ANDROID_PACKAGE
+            . ';S.browser_fallback_url=' . rawurlencode($fallback) . ';end';
+    }
+
+    /**
+     * Appelle l'API Sonatel eWallet v4 qrcode (aligné projet de référence).
+     */
+    private function createPaymentQRCodeViaApi(array $qr_request, string $reference, string $payment_id): array
     {
         try {
-            // Mise à jour du paiement avec la référence
-            $this->payment::where(['id' => $payment_data->id])->update([
-                'transaction_id' => $reference,
-                'payment_method' => 'orange_money'
-            ]);
+            $access_token = $this->getAccessToken();
+            $merchant_code = $qr_request['code']; // string ou int selon API
+            $name = $this->config_values['merchant_name'] ?? $qr_request['name'] ?? 'SIAME';
+            $amount_value = (int) $qr_request['amount']['value'];
+            $success_url = route('orange_money.callback', ['payment_id' => $payment_id, 'status' => 'success']);
+            $cancel_url = route('orange_money.callback', ['payment_id' => $payment_id, 'status' => 'cancel']);
+            // metadata : 'order' comme projet de référence (orderId) + payment_id pour notre traitement
+            $metadata = $qr_request['metadata'] ?? ['payment_id' => $payment_id, 'reference' => $reference];
+            $metadata['order'] = $payment_id;
 
-            Log::info('Orange Money: Génération des DeepLinks', [
-                'payment_id' => $payment_data->id,
-                'reference' => $reference,
-                'has_max_it' => $appDetection['has_max_it'],
-                'has_orange_money' => $appDetection['has_orange_money']
-            ]);
+            // Payload conforme à la doc Sonatel eWallet v4 (/api/eWallet/v4/qrcode)
+            $body = [
+                'amount' => ['unit' => 'XOF', 'value' => $amount_value],
+                'callbackSuccessUrl' => $success_url,
+                'callbackCancelUrl' => $cancel_url,
+                'code' => $merchant_code,
+                'metadata' => $metadata,
+                'name' => $name,
+                'validity' => 15,
+            ];
 
-            // Stocker les données en session
-            session([
-                'orange_money_reference' => $reference,
-                'orange_money_payment_id' => $payment_data->id,
-                'orange_money_amount' => $qr_request['amount']['value'],
-                'orange_money_merchant_code' => $merchant_code,
-                'orange_money_business_name' => $qr_request['name']
-            ]);
+            $full_url = rtrim($this->base_url, '/') . '/' . ltrim(self::OM_QRCODE_ENDPOINT, '/');
 
-            // Générer le DeepLink pour l'application préférée
-            $preferred_app = $appDetection['preferred_app'];
-            $deeplink = $this->generateAppDeepLink($qr_request, $reference, $payment_data, $preferred_app);
-            
-            // Générer aussi le DeepLink alternatif si les deux apps sont disponibles
-            $alternate_deeplink = null;
-            if ($appDetection['has_max_it'] && $appDetection['has_orange_money']) {
-                // Les deux sont installées, générer aussi celui d'Orange Money
-                $alternate_deeplink = $this->generateAppDeepLink($qr_request, $reference, $payment_data, 'orangemoney');
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $access_token,
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ])
+                ->timeout(30)
+                ->post($full_url, $body);
+
+            if (!$response->successful()) {
+                Log::error('Orange Money: createPaymentQRCode API error', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                    'payment_id' => $payment_id,
+                ]);
+                return [
+                    'success' => false,
+                    'error' => $this->parseOrangeMoneyError($response->json() ?? []) ?: $response->body(),
+                ];
             }
-            
-            session([
-                'orange_money_deeplink' => $deeplink,
-                'orange_money_app_type' => $preferred_app,
-                'orange_money_has_max_it' => $appDetection['has_max_it'],
-                'orange_money_has_orange_money' => $appDetection['has_orange_money'],
-                'orange_money_alternate_deeplink' => $alternate_deeplink
-            ]);
-            
-            Log::info('Orange Money: DeepLinks générés, redirection vers page de choix', [
-                'payment_id' => $payment_data->id,
-                'preferred_app' => $preferred_app,
-                'has_max_it' => $appDetection['has_max_it'],
-                'has_orange_money' => $appDetection['has_orange_money'],
-                'deeplink' => substr($deeplink, 0, 50) . '...'
-            ]);
 
-            // Redirection vers la page qui tentera d'ouvrir l'application
-            return redirect()->route('orange_money.choose_payment', ['payment_id' => $payment_data->id]);
+            $data = $response->json();
+            $deepLinks = $data['deepLinks'] ?? [];
+            // Clés possibles selon doc @sonatel-os/juf : MAXIT, OM (insensible à la casse)
+            $deepLinksNormalized = array_change_key_case(is_array($deepLinks) ? $deepLinks : [], CASE_UPPER);
+            $maxit = $deepLinksNormalized['MAXIT'] ?? $data['deepLink'] ?? null;
+            $om = $deepLinksNormalized['OM'] ?? $data['deepLink'] ?? null;
 
+            if (!$maxit && !$om) {
+                Log::warning('Orange Money: createPaymentQRCode sans deepLinks', [
+                    'response_keys' => array_keys($data),
+                    'payment_id' => $payment_id,
+                ]);
+            }
+
+            return [
+                'success' => true,
+                'qrId' => $data['qrId'] ?? null,
+                'deepLink' => $data['deepLink'] ?? $maxit ?? $om,
+                'deepLinks' => [
+                    'MAXIT' => $maxit,
+                    'OM' => $om,
+                ],
+                'qrCode' => $data['qrCode'] ?? null,
+                'validity' => $data['validity'] ?? null,
+                'shortLink' => $data['shortLink'] ?? null,
+            ];
         } catch (Exception $e) {
-            Log::error('Orange Money: Erreur lors de la génération des DeepLinks', [
+            Log::error('Orange Money: createPaymentQRCodeViaApi exception', [
                 'error' => $e->getMessage(),
-                'payment_id' => $payment_data->id
+                'payment_id' => $payment_id,
+                'trace' => $e->getTraceAsString(),
             ]);
-            throw $e;
-        }
-    }
-
-    /**
-     * Page de choix du mode de paiement (Max It, Orange Money ou QR Code)
-     * Tente d'ouvrir l'application préférée, avec fallback sur QR Code
-     */
-    public function choosePaymentMethod(Request $request)
-    {
-        $payment_id = $request->get('payment_id');
-        
-        if (!$payment_id) {
-            return response()->json(['error' => 'Payment ID manquant'], 400);
-        }
-
-        $deeplink = session('orange_money_deeplink');
-        $app_type = session('orange_money_app_type', 'maxit');
-        $has_max_it = session('orange_money_has_max_it', false);
-        $has_orange_money = session('orange_money_has_orange_money', false);
-        $alternate_deeplink = session('orange_money_alternate_deeplink');
-        $reference = session('orange_money_reference');
-        $amount = session('orange_money_amount');
-
-            if (!$deeplink || !$reference) {
-            // Si pas de DeepLink, retourner une erreur
-            return response()->json([
+            return [
                 'success' => false,
-                'message' => 'Aucune application de paiement détectée. Veuillez installer Max It ou Orange Money.'
-            ], 400);
+                'error' => $e->getMessage(),
+            ];
         }
-
-        // Déterminer le nom de l'application à afficher
-        $app_name = $app_type === 'maxit' ? 'Max It' : 'Orange Money';
-        $app_name_alt = $app_type === 'maxit' ? 'Orange Money' : 'Max It';
-        $has_max_it_js = $has_max_it ? 'true' : 'false';
-        $has_orange_money_js = $has_orange_money ? 'true' : 'false';
-
-        // Construire le bouton alternatif si disponible
-        $alternate_button = '';
-        if ($alternate_deeplink) {
-            $alternate_button = '<button class="app-button secondary" onclick="openApp(\'' . 
-                htmlspecialchars($alternate_deeplink, ENT_QUOTES) . '\', \'' . 
-                htmlspecialchars($app_name_alt, ENT_QUOTES) . '\')">Ouvrir ' . 
-                htmlspecialchars($app_name_alt, ENT_QUOTES) . '</button>';
-        }
-
-        // Retourner une page HTML qui tentera d'ouvrir l'application
-        // Si l'app ne s'ouvre pas, afficher les options disponibles
-        $callback_url = route('orange_money.callback', ['payment_id' => $payment_id, 'status' => 'cancel']);
-        
-        $html = <<<HTML
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Paiement Orange Money</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            margin: 0;
-            background: #f5f5f5;
-        }
-        .container {
-            text-align: center;
-            padding: 20px;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            max-width: 400px;
-        }
-        .loading {
-            margin: 20px 0;
-        }
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #FF6600;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .fallback-link {
-            margin-top: 20px;
-            padding: 15px;
-            background: #FF6600;
-            color: white;
-            text-decoration: none;
-            border-radius: 5px;
-            display: inline-block;
-        }
-        .app-buttons {
-            margin-top: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        .app-button {
-            padding: 12px;
-            background: #FF6600;
-            color: white;
-            text-decoration: none;
-            border-radius: 5px;
-            border: none;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        .app-button.secondary {
-            background: #666;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h2>Ouverture de {$app_name}...</h2>
-        <div class="loading">
-            <div class="spinner"></div>
-            <p>Ouverture de l'application <strong>{$app_name}</strong> pour finaliser le paiement...</p>
-        </div>
-        <div class="app-buttons" id="appButtons" style="display: none;">
-            <button class="app-button" onclick="openApp('{$deeplink}', '{$app_name}')">
-                Ouvrir {$app_name}
-            </button>
-            {$alternate_button}
-            <a href="{$callback_url}" class="app-button secondary" style="text-decoration: none; display: block;">
-                Annuler le paiement
-            </a>
-        </div>
-        <p style="margin-top: 20px; color: #666; font-size: 14px;">
-            Si l'application ne s'ouvre pas automatiquement, cliquez sur le bouton ci-dessus pour l'ouvrir manuellement.
-            <br><br>
-            <strong>Note :</strong> Vous devez avoir Max It ou Orange Money installée sur votre téléphone pour effectuer le paiement.
-        </p>
-    </div>
-    
-    <script>
-        // Configuration
-        const deeplink = '{$deeplink}';
-        const alternateDeeplink = '{$alternate_deeplink}';
-        const callbackUrl = '{$callback_url}';
-        const appType = '{$app_type}';
-        const hasMaxIt = {$has_max_it_js};
-        const hasOrangeMoney = {$has_orange_money_js};
-        
-        // Fonction pour détecter si on est sur mobile
-        function isMobile() {
-            return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-        }
-        
-        // Fonction pour ouvrir une application
-        function openApp(link, appName) {
-            if (isMobile()) {
-                // Tentative d'ouverture
-                window.location.href = link;
-                
-                // Afficher les boutons après 2 secondes si l'app ne s'ouvre pas
-                setTimeout(function() {
-                    if (document.hasFocus()) {
-                        document.getElementById('appButtons').style.display = 'block';
-                    }
-                }, 2000);
-            } else {
-                // Sur desktop, afficher un message
-                alert('Veuillez utiliser un appareil mobile avec Max It ou Orange Money installée pour effectuer le paiement.');
-                document.getElementById('appButtons').style.display = 'block';
-            }
-        }
-        
-        // Tentative d'ouverture automatique de l'app préférée
-        if (isMobile()) {
-            // Ouvrir l'application préférée (Max It en priorité)
-            openApp(deeplink, appType === 'maxit' ? 'Max It' : 'Orange Money');
-            
-            // Si après 3 secondes on est toujours sur la page, afficher les options
-            setTimeout(function() {
-                if (document.hasFocus()) {
-                    document.getElementById('appButtons').style.display = 'block';
-                }
-            }, 3000);
-            
-            // Détection de retour depuis l'app
-            let hidden = false;
-            document.addEventListener('visibilitychange', function() {
-                if (document.hidden) {
-                    hidden = true;
-                } else if (hidden) {
-                    // L'utilisateur est revenu, peut-être depuis l'app
-                    setTimeout(function() {
-                        // Optionnel: vérifier le statut du paiement
-                    }, 1000);
-                }
-            });
-        } else {
-            // Sur desktop, afficher les boutons directement
-            document.getElementById('appButtons').style.display = 'block';
-            alert('Veuillez utiliser un appareil mobile avec Max It ou Orange Money installée pour effectuer le paiement.');
-        }
-    </script>
-</body>
-</html>
-HTML;
-
-        return response($html)->header('Content-Type', 'text/html');
     }
 
-
     /**
-     * Gère le callback de Orange Money après le paiement
-     * Les callbacks sont envoyés via webhook, mais on garde cette méthode pour les redirections
+     * Callback HTTP après redirection Sonatel (callbackSuccessUrl / callbackCancelUrl).
+     * Aligné avec le flux du projet de référence : Sonatel redirige ici avec payment_id (équivalent orderId) et status.
+     * Le webhook reste la source de vérité pour marquer is_paid = 1.
      */
     public function callback(Request $request)
     {
@@ -830,34 +675,69 @@ HTML;
                 return response()->json(['success' => false, 'message' => 'Paiement non trouvé'], 404);
             }
 
+            // Si déjà payé via webhook (source de vérité), retourner succès immédiatement
+            if ($payment_data->is_paid == 1) {
+                Log::info('Orange Money: Paiement déjà confirmé via webhook (source de vérité)', [
+                    'payment_id' => $payment_id
+                ]);
+                return $this->payment_response($payment_data, 'success');
+            }
+
             if ($status === 'success') {
-                // Vérifier le statut via l'API de recherche de transaction
+                // Tentative de vérification via API (best-effort, peut échouer si latence)
+                // ⚠️ Le webhook est la source de vérité finale, pas ce callback HTTP
                 $reference = $payment_data->transaction_id;
                 if ($reference) {
                     $verification_response = $this->verifyPaymentStatus($reference);
                     
-                    if ($verification_response['success']) {
-                        // Mise à jour du statut de paiement
-                        $this->payment::where(['id' => $payment_id])->update([
-                            'payment_method' => 'orange_money',
-                            'is_paid' => 1,
-                            'updated_at' => now()
-                        ]);
+                    // Si vérification réussie ET montant validé, on peut marquer comme payé
+                    // Sinon, on attend le webhook (source de vérité)
+                    if ($verification_response['success'] && isset($verification_response['transaction'])) {
+                        $transaction = $verification_response['transaction'];
+                        
+                        // Validation du montant avant de marquer comme payé (anti-fraude)
+                        if ($this->validatePaymentAmount($payment_data, $transaction)) {
+                            // Mise à jour du statut de paiement
+                            $this->payment::where(['id' => $payment_id])->update([
+                                'payment_method' => 'orange_money',
+                                'is_paid' => 1,
+                                'updated_at' => now()
+                            ]);
 
-                        Log::info('Orange Money: Paiement confirmé avec succès', [
+                            Log::info('Orange Money: Paiement confirmé via callback (en attente confirmation webhook)', [
+                                'payment_id' => $payment_id,
+                                'reference' => $reference
+                            ]);
+
+                            // Traitement post-paiement
+                            $this->handleSuccessfulPayment($payment_data);
+
+                            return $this->payment_response($payment_data, 'success');
+                        } else {
+                            Log::warning('Orange Money: Montant payé ne correspond pas (attente webhook)', [
+                                'payment_id' => $payment_id,
+                                'expected' => $payment_data->payment_amount,
+                                'received' => $transaction['amount']['value'] ?? 'N/A'
+                            ]);
+                        }
+                    } else {
+                        // Vérification API échouée ou transactions[] vide → attendre webhook
+                        Log::info('Orange Money: Vérification API non concluante, attente webhook (source de vérité)', [
                             'payment_id' => $payment_id,
-                            'reference' => $reference
+                            'reference' => $reference,
+                            'verification_error' => $verification_response['error'] ?? 'Transactions array vide'
                         ]);
-
-                        // Traitement post-paiement
-                        $this->handleSuccessfulPayment($payment_data);
-
-                        return $this->payment_response($payment_data, 'success');
                     }
                 }
+                
+                // Succès mais vérification API non concluante (webhook en attente). On redirige quand même
+                // vers l'app / page succès pour ne pas bloquer l'utilisateur (deep link ou web).
+                // Le webhook reste la source de vérité pour is_paid ; l'écran commande affichera "en cours" puis se mettra à jour.
+                return $this->payment_response($payment_data, 'success');
             }
 
-            // Paiement annulé ou échoué
+            // Paiement annulé ou échoué (cancel = annulation, autre = échec) — deep link siame:// si app
+            $redirect_flag = ($status === 'cancel') ? 'cancel' : 'fail';
             Log::info('Orange Money: Paiement annulé ou échoué', [
                 'payment_id' => $payment_id,
                 'status' => $status
@@ -883,7 +763,7 @@ HTML;
                 }
             }
 
-            return $this->payment_response($payment_data, 'fail');
+            return $this->payment_response($payment_data, $redirect_flag);
 
         } catch (Exception $e) {
             Log::error('Orange Money: Erreur lors du callback', [
@@ -919,8 +799,11 @@ HTML;
     }
 
     /**
-     * Webhook Orange Money pour les notifications de paiement
-     * Selon la documentation, les callbacks sont envoyés en POST
+     * Webhook Orange Money pour les notifications de paiement (SOURCE DE VÉRITÉ FINALE).
+     * Selon la documentation, les callbacks sont envoyés en POST.
+     * 
+     * ⚠️ Si contrat Sonatel fournit une signature webhook (header X-Signature),
+     * décommentez et configurez la vérification ci-dessous pour sécuriser le webhook.
      */
     public function webhook(Request $request)
     {
@@ -928,6 +811,19 @@ HTML;
             $payload = $request->all();
             
             Log::info('Orange Money Webhook Received: ' . json_encode($payload));
+            
+            // Vérification de signature webhook (si fournie par Sonatel selon contrat)
+            // Décommentez si votre contrat inclut une signature HMAC et définissez $webhook_secret
+            /*
+            $signature = $request->header('X-Signature');
+            $webhook_secret = 'votre_secret_webhook';
+            if ($signature && $webhook_secret) {
+                $expected_signature = hash_hmac('sha256', json_encode($payload), $webhook_secret);
+                if (!hash_equals($expected_signature, $signature)) {
+                    return response()->json(['status' => 'invalid_signature'], 401);
+                }
+            }
+            */
             
             // Traitement du webhook selon la documentation
             // Format du callback selon doc :
@@ -946,13 +842,18 @@ HTML;
             return response()->json(['status' => 'success'], 200);
 
         } catch (Exception $e) {
-            Log::error('Orange Money Webhook Error: ' . $e->getMessage());
+            Log::error('Orange Money Webhook Error: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json(['status' => 'error'], 500);
         }
     }
 
     /**
-     * Traitement du webhook de paiement
+     * Traitement du webhook de paiement (SOURCE DE VÉRITÉ FINALE).
+     * 
+     * Le webhook Sonatel est la seule garantie fiable pour marquer is_paid = 1.
+     * Orange peut renvoyer le webhook plusieurs fois → idempotence requise.
      */
     private function processWebhookPayment($payload)
     {
@@ -960,39 +861,94 @@ HTML;
             $reference = $payload['reference'] ?? null;
             $status = $payload['status'] ?? null;
             $transaction_id = $payload['transactionId'] ?? null;
+            $amount = $payload['amount']['value'] ?? null;
 
             if (!$reference) {
                 Log::warning('Orange Money: Webhook sans référence');
                 return;
             }
 
-            // Extraction de l'ID de paiement depuis la référence
-            if (preg_match('/PAYMENT_([a-f0-9-]+)_/', $reference, $matches)) {
-                $payment_id = $matches[1];
-                $payment_data = $this->payment::find($payment_id);
-                
-                if ($payment_data && ($status === 'SUCCESS' || $status === 'success')) {
-                    $this->payment::where(['id' => $payment_id])->update([
-                        'payment_method' => 'orange_money',
-                        'is_paid' => 1,
-                        'transaction_id' => $transaction_id ?? $reference,
-                        'updated_at' => now()
-                    ]);
-
-                    $this->handleSuccessfulPayment($payment_data);
-
-                    Log::info('Orange Money: Paiement confirmé via webhook', [
-                        'payment_id' => $payment_id,
-                        'transaction_id' => $transaction_id
-                    ]);
-                } else {
-                    Log::info('Orange Money: Webhook reçu avec statut non-success', [
-                        'payment_id' => $payment_id,
-                        'status' => $status
-                    ]);
+            // Extraction de l'ID de paiement depuis metadata (plus fiable que parsing référence)
+            // La référence a changé de format: PMT + UUID, donc on utilise metadata.payment_id
+            $payment_id = $payload['metadata']['payment_id'] ?? null;
+            
+            // Fallback: chercher par transaction_id si metadata non disponible
+            if (!$payment_id && $transaction_id) {
+                $payment_data = $this->payment::where('transaction_id', $transaction_id)->first();
+                if ($payment_data) {
+                    $payment_id = $payment_data->id;
                 }
+            }
+            
+            // Dernier fallback: chercher par référence (si ancien format encore utilisé)
+            if (!$payment_id && preg_match('/PAYMENT_([a-f0-9-]+)_/', $reference, $matches)) {
+                $payment_id = $matches[1];
+            }
+
+            if (!$payment_id) {
+                Log::warning('Orange Money: Impossible d\'extraire payment_id du webhook', [
+                    'reference' => $reference,
+                    'transaction_id' => $transaction_id,
+                    'metadata' => $payload['metadata'] ?? null
+                ]);
+                return;
+            }
+
+            $payment_data = $this->payment::find($payment_id);
+            
+            if (!$payment_data) {
+                Log::warning('Orange Money: Paiement non trouvé pour le webhook', [
+                    'payment_id' => $payment_id,
+                    'reference' => $reference
+                ]);
+                return;
+            }
+
+            // IDEMPOTENCE: Si déjà payé, ne pas retraiter (Orange peut renvoyer le webhook)
+            if ($payment_data->is_paid == 1) {
+                Log::info('Orange Money: Webhook déjà traité (idempotence)', [
+                    'payment_id' => $payment_id,
+                    'reference' => $reference
+                ]);
+                return;
+            }
+
+            if ($status === 'SUCCESS' || $status === 'success') {
+                // Validation du montant avant de marquer comme payé (anti-fraude)
+                $transaction_data = [
+                    'amount' => [
+                        'value' => $amount ?? $payment_data->payment_amount
+                    ]
+                ];
+                
+                if (!$this->validatePaymentAmount($payment_data, $transaction_data)) {
+                    Log::error('Orange Money: Montant webhook ne correspond pas (fraude possible)', [
+                        'payment_id' => $payment_id,
+                        'expected' => $payment_data->payment_amount,
+                        'received' => $amount
+                    ]);
+                    return;
+                }
+
+                // Mise à jour du statut de paiement (source de vérité)
+                $this->payment::where(['id' => $payment_id])->update([
+                    'payment_method' => 'orange_money',
+                    'is_paid' => 1,
+                    'transaction_id' => $transaction_id ?? $reference,
+                    'updated_at' => now()
+                ]);
+
+                $this->handleSuccessfulPayment($payment_data);
+
+                Log::info('Orange Money: Paiement confirmé via webhook (source de vérité)', [
+                    'payment_id' => $payment_id,
+                    'transaction_id' => $transaction_id,
+                    'reference' => $reference
+                ]);
             } else {
-                Log::warning('Orange Money: Impossible d\'extraire payment_id de la référence', [
+                Log::info('Orange Money: Webhook reçu avec statut non-success', [
+                    'payment_id' => $payment_id,
+                    'status' => $status,
                     'reference' => $reference
                 ]);
             }
@@ -1048,9 +1004,13 @@ HTML;
                         ];
                     }
                 } else {
+                    // Transactions[] vide ne signifie PAS forcément échec
+                    // Peut être dû à latence API ou endpoint non activé selon contrat
+                    // On retourne success=false mais avec un message explicite pour attendre webhook
                     return [
                         'success' => false,
-                        'error' => 'Transaction non trouvée'
+                        'error' => 'Transaction non trouvée dans l\'API (peut être en latence). Attente webhook (source de vérité).',
+                        'wait_for_webhook' => true
                     ];
                 }
             } else {

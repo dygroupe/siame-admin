@@ -135,6 +135,16 @@ class PaymentController extends Controller
             'business_name' => BusinessSetting::where(['key'=>'business_name'])->first()?->value,
             'business_logo' => \App\CentralLogics\Helpers::get_full_url('business',$store_logo?->value,$store_logo?->storage[0]?->value ?? 'public' )
         ];
+        // Paramètres envoyés par l'app pour le deep link Siame (siame://payment)
+        if ($request->has('guest_id')) {
+            $additional_data['guest_id'] = $request->input('guest_id');
+        }
+        if ($request->has('create_account')) {
+            $additional_data['create_account'] = $request->boolean('create_account');
+        }
+        if ($request->has('contact_number')) {
+            $additional_data['contact_number'] = $request->input('contact_number');
+        }
 
         $payment_info = new PaymentInfo(
             success_hook: 'order_place',
