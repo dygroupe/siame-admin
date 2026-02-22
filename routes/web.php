@@ -17,6 +17,7 @@ use App\Http\Controllers\StripePaymentController;
 use App\Http\Controllers\SslCommerzPaymentController;
 use App\Http\Controllers\WaveController;
 use App\Http\Controllers\OrangeMoneyController;
+use App\Http\Controllers\SiameRedirectController;
 use Illuminate\Support\Facades\Http;
 
 /*
@@ -76,6 +77,9 @@ Route::group(['prefix' => 'payment-mobile'], function () {
 Route::get('payment-success', 'PaymentController@success')->name('payment-success');
 Route::get('payment-fail', 'PaymentController@fail')->name('payment-fail');
 Route::get('payment-cancel', 'PaymentController@cancel')->name('payment-cancel');
+
+// Page intermédiaire pour retour à l'app Siame après paiement Wave/Orange Money
+Route::get('siame/payment', [SiameRedirectController::class, 'payment'])->name('siame.payment');
 
 $is_published = 0;
 try {

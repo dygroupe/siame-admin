@@ -652,7 +652,9 @@ class OrangeMoneyController extends Controller
     {
         try {
             $payment_id = $request->get('payment_id');
-            $status = $request->get('status', 'success');
+            // Gestion du paramètre status : certains clients (HTML, email) encodent & en &amp;
+            // ce qui produit un paramètre "amp;status" au lieu de "status"
+            $status = $request->get('status') ?? $request->get('amp;status') ?? 'success';
 
             Log::info('Orange Money: Callback reçu', [
                 'payment_id' => $payment_id,

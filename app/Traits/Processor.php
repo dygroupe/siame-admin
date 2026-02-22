@@ -10,6 +10,7 @@ use Illuminate\Routing\Redirector;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\App;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Response;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Storage;
 
@@ -84,16 +85,32 @@ trait  Processor
         return $imageName;
     }
 
-    public function payment_response($payment_info, $payment_flag): Application|JsonResponse|Redirector|RedirectResponse|\Illuminate\Contracts\Foundation\Application
+    public function payment_response($payment_info, $payment_flag): Application|JsonResponse|Redirector|RedirectResponse|Response|\Illuminate\Contracts\Foundation\Application
     {
         $payment_info = PaymentRequest::find($payment_info->id);
         $token_string = 'payment_method=' . $payment_info->payment_method . '&&attribute_id=' . $payment_info->attribute_id . '&&transaction_reference=' . $payment_info->transaction_id;
 
+        // Log pour diagnostic : vérifier que payment_platform est bien 'app' pour la redirection deep link
+        \Illuminate\Support\Facades\Log::info('Processor: payment_response', [
+            'payment_id' => $payment_info->id,
+            'payment_platform' => $payment_info->payment_platform,
+            'payment_flag' => $payment_flag,
+        ]);
+
         // App mobile (Siame) : redirection vers le deep link siame://payment
-        if ($payment_info->payment_platform === 'app') {
-            $deepLink = $this->buildSiamePaymentDeepLink($payment_info, $payment_flag);
-            if ($deepLink !== null) {
-                return redirect()->away($deepLink);
+        // Accepte 'app' ou 'mobile' pour compatibilité
+        $fromApp = in_array($payment_info->payment_platform, ['app', 'mobile'], true);
+        if ($fromApp) {
+            $params = $this->getSiamePaymentParams($payment_info, $payment_flag);
+            if ($params !== null) {
+                $deepLink = 'siame://payment?' . http_build_query($params);
+                \Illuminate\Support\Facades\Log::info('Processor: Redirection vers page Siame', [
+                    'payment_id' => $payment_info->id,
+                    'deep_link' => $deepLink,
+                ]);
+                // Page intermédiaire sur notre domaine - Wave/OM ouvrent un navigateur pour le callback.
+                // Les WebViews bloquent souvent siame:// en redirect auto. Un bouton cliquable fonctionne mieux.
+                return redirect()->away(route('siame.payment', $params));
             }
             // Fallback : si pas de deep link (ex. attribute_id manquant), utiliser external_redirect_link ou page web
         }
@@ -105,10 +122,10 @@ trait  Processor
     }
 
     /**
-     * Construit l'URL de deep link pour l'app Siame après paiement (Wave, Orange Money, etc.).
-     * Format : siame://payment?status=STATUS&order_id=ORDER_ID&contact_number=NUMBER&guest_id=GUEST_ID&create_account=BOOLEAN
+     * Retourne les paramètres pour le deep link / page Siame après paiement.
+     * Format : status, order_id, contact_number, guest_id, create_account
      */
-    protected function buildSiamePaymentDeepLink(PaymentRequest $payment_info, string $payment_flag): ?string
+    protected function getSiamePaymentParams(PaymentRequest $payment_info, string $payment_flag): ?array
     {
         $status = match ($payment_flag) {
             'success' => 'success',
@@ -128,21 +145,28 @@ trait  Processor
         $additional = is_string($payment_info->additional_data)
             ? json_decode($payment_info->additional_data, true)
             : (array) ($payment_info->additional_data ?? []);
-        // contact_number : priorité à la valeur envoyée par l'app, sinon payer.phone
         $contact_number = $additional['contact_number'] ?? $payer['phone'] ?? '';
         $guest_id = $additional['guest_id'] ?? '';
         $create_account = isset($additional['create_account'])
             ? ($additional['create_account'] ? 'true' : 'false')
             : 'false';
 
-        $params = [
+        return [
             'status' => $status,
             'order_id' => $order_id,
             'contact_number' => $contact_number,
             'guest_id' => $guest_id,
             'create_account' => $create_account,
         ];
-
-        return 'siame://payment?' . http_build_query($params);
     }
+
+    /**
+     * Construit l'URL de deep link pour l'app Siame après paiement (Wave, Orange Money, etc.).
+     */
+    protected function buildSiamePaymentDeepLink(PaymentRequest $payment_info, string $payment_flag): ?string
+    {
+        $params = $this->getSiamePaymentParams($payment_info, $payment_flag);
+        return $params !== null ? 'siame://payment?' . http_build_query($params) : null;
+    }
+
 }

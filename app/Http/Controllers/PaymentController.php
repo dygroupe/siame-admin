@@ -146,12 +146,15 @@ class PaymentController extends Controller
             $additional_data['contact_number'] = $request->input('contact_number');
         }
 
+        // payment-mobile est utilisé par l'app Flutter : par défaut 'app' si non fourni
+        $payment_platform = $request->input('payment_platform') ?: 'app';
+
         $payment_info = new PaymentInfo(
             success_hook: 'order_place',
             failure_hook: 'order_failed',
             currency_code: $currency,
             payment_method: $request->payment_method,
-            payment_platform: $request['payment_platform'],
+            payment_platform: $payment_platform,
             payer_id: $request['customer_id'],
             receiver_id: '100',
             additional_data: $additional_data,

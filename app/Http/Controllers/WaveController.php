@@ -186,7 +186,11 @@ class WaveController extends Controller
                 ), 400);
             }
 
-            // Préparation de la requête Wave selon la documentation officielle
+            // Préparation de la requête Wave selon la documentation officielle.
+            // Note: L'app Wave peut afficher un écran intermédiaire (ex. "Solde insuffisant" avec bouton
+            // "Retourner sur la page du marchand") au lieu d'une redirection automatique vers error_url.
+            // Ce comportement est géré par Wave et ne peut pas être désactivé via l'API. Une fois que
+            // l'utilisateur clique sur ce bouton, il est renvoyé vers error_url puis vers notre page Siame.
             $wave_request = [
                 'amount' => $amount,
                 'currency' => $currency,
