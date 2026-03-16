@@ -405,10 +405,10 @@ Route::group(['namespace' => 'Admin', 'as' => 'admin.'], function () {
                 Route::post('login-setup/update', 'BusinessSettingsController@login_settings_update')->name('update');
             });
 
-            Route::group(['prefix' => 'addon-activation', 'as' => 'addon-activation.'], function () {
-                Route::get('', 'AddonActivationController@index')->name('index');
-                Route::post('activation', 'AddonActivationController@activation')->name('activation');
-            });
+            // Route::group(['prefix' => 'addon-activation', 'as' => 'addon-activation.'], function () {
+            //     Route::get('', 'AddonActivationController@index')->name('index');
+            //     Route::post('activation', 'AddonActivationController@activation')->name('activation');
+            // });
 
             Route::get('login-url-setup', 'BusinessSettingsController@login_url_page')->name('login_url_page');
             Route::post('login-url-setup/update', 'BusinessSettingsController@login_url_page_update')->name('login_url_update');

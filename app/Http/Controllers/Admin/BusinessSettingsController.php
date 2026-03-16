@@ -392,35 +392,22 @@ class BusinessSettingsController extends Controller
             'value' => $request['system_php_path'],
         ]);
 
-        if (function_exists('exec')) {
-            $data = self::generateCronCommand(disbursement_type: $request['disbursement_type']);
-            $scriptPath = 'script.sh';
-            exec('sh ' . $scriptPath);
-            Helpers::businessUpdateOrInsert(['key' => 'store_disbursement_command'], [
-                'value' => $data['storeCronCommand'],
-            ]);
-            Helpers::businessUpdateOrInsert(['key' => 'dm_disbursement_command'], [
-                'value' => $data['dmCronCommand'],
-            ]);
-            Toastr::success(translate('messages.successfully_updated_disbursement_functionality'));
+        $data = self::generateCronCommand(disbursement_type: $request['disbursement_type']);
+        Helpers::businessUpdateOrInsert(['key' => 'store_disbursement_command'], [
+            'value' => $data['storeCronCommand'],
+        ]);
+        Helpers::businessUpdateOrInsert(['key' => 'dm_disbursement_command'], [
+            'value' => $data['dmCronCommand'],
+        ]);
 
-            return back();
-        } else {
-            $data = self::generateCronCommand(disbursement_type: $request['disbursement_type']);
-            Helpers::businessUpdateOrInsert(['key' => 'store_disbursement_command'], [
-                'value' => $data['storeCronCommand'],
-            ]);
-            Helpers::businessUpdateOrInsert(['key' => 'dm_disbursement_command'], [
-                'value' => $data['dmCronCommand'],
-            ]);
-            if ($request['disbursement_type'] == 'automated') {
-                Session::flash('disbursement_exec', true);
-                Toastr::warning(translate('messages.Servers_PHP_exec_function_is_disabled_check_dependencies_&_start_cron_job_manualy_in_server'));
-            }
-            Toastr::success(translate('messages.successfully_updated_disbursement_functionality'));
-
-            return back();
+        if ($request['disbursement_type'] == 'automated') {
+            Session::flash('disbursement_exec', true);
+            Toastr::warning(translate('messages.Servers_PHP_exec_function_is_disabled_check_dependencies_&_start_cron_job_manualy_in_server'));
         }
+
+        Toastr::success(translate('messages.successfully_updated_disbursement_functionality'));
+
+        return back();
     }
 
     private function dmSchedule()
