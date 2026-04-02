@@ -24,6 +24,7 @@ use App\Models\RefundReason;
 use App\Traits\PlaceNewOrder;
 use Illuminate\Http\Request;
 use App\CentralLogics\Helpers;
+use App\CentralLogics\HeavyDeliveryLogic;
 use App\Models\BusinessSetting;
 use App\CentralLogics\OrderLogic;
 use App\CentralLogics\CouponLogic;
@@ -231,30 +232,41 @@ class OrderController extends Controller
                 return to_route('admin.parcel.order.details', $id);
             }
             $excludeDm = $order->delivery_man_id;
-            if (isset($order->store)) {
-                $deliveryMen = DeliveryMan::where('zone_id', $order->store->zone_id)
-                ->where(function($query)use($order){
-                            $query->where('vehicle_id',$order->dm_vehicle_id)->orWhereNull('vehicle_id');
-                    })
+            $fourgonId = HeavyDeliveryLogic::fourgonVehicleId();
+            $heavy = (int)($order->has_heavy_weight_items ?? 0) === 1;
+
+            $deliveryMenQuery = function ($zoneId) use ($order, $excludeDm, $fourgonId, $heavy) {
+                $q = DeliveryMan::where('zone_id', $zoneId)
                     ->where('id', '!=', $excludeDm)
                     ->available()
-                    ->active()
-                    ->get();
+                    ->active();
+
+                if ($heavy && $fourgonId) {
+                    $q->where('vehicle_id', $fourgonId);
+                } elseif ($heavy && ! $fourgonId) {
+                    $q->whereRaw('0 = 1');
+                } else {
+                    $q->where(function ($query) use ($order, $fourgonId) {
+                        $query->where('vehicle_id', $order->dm_vehicle_id)
+                            ->orWhereNull('vehicle_id');
+                        if ($fourgonId) {
+                            $query->orWhere('vehicle_id', $fourgonId);
+                        }
+                    });
+                }
+
+                return $q->get();
+            };
+
+            if (isset($order->store)) {
+                $deliveryMen = $deliveryMenQuery($order->store->zone_id);
             }
             else {
-                if($order->store !== null){
-                    $deliveryMen = isset($order->zone_id) ? DeliveryMan::where('zone_id', $order->store->zone_id)->where(function($query)use($order){
-                            $query->where('vehicle_id',$order->dm_vehicle_id)
-                                ->orWhereNull('vehicle_id');
-                    })
-                        ->where('id', '!=', $excludeDm)
-                        ->available()
-                        ->active()
-                        ->get():
-                        [];
-                } else{
-                    $deliveryMen = DeliveryMan::where('zone_id', '=', NULL)
-                        ->where('vehicle_id',$order->dm_vehicle_id)
+                if ($order->store !== null) {
+                    $deliveryMen = isset($order->zone_id) ? $deliveryMenQuery($order->store->zone_id) : [];
+                } else {
+                    $deliveryMen = DeliveryMan::where('zone_id', '=', null)
+                        ->where('vehicle_id', $order->dm_vehicle_id)
                         ->where('id', '!=', $excludeDm)
                         ->active()
                         ->get();
@@ -592,6 +604,10 @@ class OrderController extends Controller
             return response()->json(['message'=> translate('messages.order_already_assign_to_this_deliveryman')  ], 400);
         }
         if ($deliveryman) {
+            if (HeavyDeliveryLogic::orderRequiresHeavyVehicle($order) && ! HeavyDeliveryLogic::deliveryManIsFourgon($deliveryman)) {
+                return response()->json(['message' => translate('messages.This_order_requires_a_Fourgon_delivery_vehicle')], 400);
+            }
+
             if ($deliveryman->current_orders >= config('dm_maximum_orders')) {
                 return response()->json(['message'=> translate('messages.dm_maximum_order_exceed_warning')  ], 400);
             }

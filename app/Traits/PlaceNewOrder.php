@@ -30,6 +30,8 @@ use App\Mail\CustomerRegistration;
 use App\Mail\PlaceOrder;
 use App\Models\AddOn;
 use App\Models\SurgePrice;
+use App\CentralLogics\HeavyDeliveryLogic;
+use App\Scopes\StoreScope;
 use Carbon\Carbon;
 
 trait PlaceNewOrder
@@ -139,7 +141,24 @@ trait PlaceNewOrder
 
             $module_wise_delivery_charge = $zone->modules()->where('modules.id', $request->header('moduleId'))->first();
 
-            $deliveryChargeData = $this->getDeliveryCharge($request, $zone, $store, $module_wise_delivery_charge, $delivery_charge, $request->header('moduleId'));
+            $hasHeavyWeightItems = false;
+            if ($request->order_type === 'delivery' && $store) {
+                $hasHeavyWeightItems = $this->requestCartHasHeavyWeightItems($request);
+            }
+
+            if ($hasHeavyWeightItems && ! HeavyDeliveryLogic::fourgonVehicleId()) {
+                DB::rollBack();
+                return response()->json([
+                    'errors' => [
+                        [
+                            'code' => 'heavy_delivery',
+                            'message' => translate('messages.Heavy_items_require_an_active_DM_vehicle_category_named_Fourgon'),
+                        ],
+                    ],
+                ], 403);
+            }
+
+            $deliveryChargeData = $this->getDeliveryCharge($request, $zone, $store, $module_wise_delivery_charge, $delivery_charge, $request->header('moduleId'), $hasHeavyWeightItems);
 
             $delivery_charge = data_get($deliveryChargeData, 'delivery_charge', 0);
             $original_delivery_charge = data_get($deliveryChargeData, 'original_delivery_charge', 0);
@@ -210,6 +229,7 @@ trait PlaceNewOrder
                 $order->confirmed = now();
             }
             $order->dm_vehicle_id = $vehicle_id;
+            $order->has_heavy_weight_items = $hasHeavyWeightItems;
             $order->pending = now();
             if (!empty($request->file('order_attachment')) && is_array($request->file('order_attachment'))) {
                 $img_names = [];
@@ -703,6 +723,50 @@ trait PlaceNewOrder
         return null;
     }
 
+    private function requestCartHasHeavyWeightItems(Request $request): bool
+    {
+        $moduleId = $request->header('moduleId');
+        $userId = $request->user ? $request->user->id : $request['guest_id'];
+        $isGuest = $request->user ? 0 : 1;
+
+        $carts = Cart::where('user_id', $userId)
+            ->where('is_guest', $isGuest)
+            ->where('module_id', $moduleId)
+            ->when(isset($request->is_buy_now) && (int) $request->is_buy_now === 1 && $request->cart_id, function ($query) use ($request) {
+                return $query->where('id', $request->cart_id);
+            })
+            ->get();
+
+        if (isset($request->is_buy_now) && (int) $request->is_buy_now === 1) {
+            $decoded = json_decode($request['cart'] ?? '[]', true);
+            $carts = is_array($decoded) ? $decoded : [];
+        } else {
+            $carts = $carts->map(function ($data) {
+                return [
+                    'item_type' => $data->item_type,
+                    'item_id' => $data->item_id,
+                ];
+            })->all();
+        }
+
+        foreach ($carts as $c) {
+            $itemType = is_array($c) ? ($c['item_type'] ?? null) : null;
+            if ($itemType && (str_contains((string) $itemType, 'ItemCampaign'))) {
+                continue;
+            }
+            $itemId = is_array($c) ? ($c['item_id'] ?? $c['id'] ?? null) : null;
+            if (! $itemId) {
+                continue;
+            }
+            $wt = Item::withoutGlobalScope(StoreScope::class)->where('id', (int) $itemId)->value('weight_type');
+            if ((int) $wt === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function getVehicleExtraCharge($distance)
     {
         $data =  DMVehicle::active()->where(function ($query) use ($distance) {
@@ -862,7 +926,7 @@ trait PlaceNewOrder
         ];
     }
 
-    private function getDeliveryCharge($request, $zone, $store, $module_wise_delivery_charge, $delivery_charge, $moduleId)
+    private function getDeliveryCharge($request, $zone, $store, $module_wise_delivery_charge, $delivery_charge, $moduleId, bool $hasHeavyWeightItems = false)
     {
         $increased = 0;
         $schedule_at = $request->schedule_at ? \Carbon\Carbon::parse($request->schedule_at) : now();
@@ -873,6 +937,15 @@ trait PlaceNewOrder
         $vehicleExtraCharge = $this->getVehicleExtraCharge($request->distance ?? 0);
         $extra_charges = $vehicleExtraCharge['extraCharge'];
         $vehicle_id = $vehicleExtraCharge['vehicle_id'];
+
+        if ($hasHeavyWeightItems && $request->order_type === 'delivery' && $store && (int) $store->sub_self_delivery !== 1) {
+            $fourgonId = HeavyDeliveryLogic::fourgonVehicleId();
+            if ($fourgonId) {
+                $vanExtra = HeavyDeliveryLogic::vehicleExtraChargeForVehicleId((float) ($request->distance ?? 0), $fourgonId);
+                $extra_charges = $vanExtra['extraCharge'];
+                $vehicle_id = $fourgonId;
+            }
+        }
 
         if ($request->order_type !== 'parcel') {
 
@@ -899,8 +972,13 @@ trait PlaceNewOrder
                 // $per_km_shipping_charge = 0;
                 // $minimum_shipping_charge = 0;
                 // $maximum_shipping_charge = 0;
+                $fallbackVehicleId = null;
+                if ($hasHeavyWeightItems && $request->order_type === 'delivery' && $store && (int) $store->sub_self_delivery !== 1) {
+                    $fallbackVehicleId = HeavyDeliveryLogic::fourgonVehicleId();
+                }
+
                 return [
-                    'vehicle_id' => null,
+                    'vehicle_id' => $fallbackVehicleId,
                     'original_delivery_charge' => 0,
                     'delivery_charge' => $delivery_charge,
                 ];

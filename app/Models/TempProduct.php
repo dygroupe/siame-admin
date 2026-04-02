@@ -34,6 +34,7 @@ class TempProduct extends Model
         'item_id'=>'integer',
         'is_rejected'=>'integer',
         'stock'=>'integer',
+        'weight_type' => 'integer',
     ];
     protected $guarded = ['id'];
     protected $appends = ['image_full_url','images_full_url'];

@@ -13,6 +13,7 @@ use App\Scopes\StoreScope;
 use App\Models\OrderDetail;
 use App\Traits\PlaceNewOrder;
 use Illuminate\Http\Request;
+use App\CentralLogics\HeavyDeliveryLogic;
 use App\CentralLogics\Helpers;
 use App\Models\BusinessSetting;
 use Illuminate\Support\Facades\DB;
@@ -545,24 +546,49 @@ class POSController extends Controller
         $extra_charges = 0;
         $vehicle_id = null;
 
+        $cart = $request->session()->get('cart');
+        $hasHeavyWeightItems = HeavyDeliveryLogic::posCartContainsHeavyItem($cart);
+
+        if ($hasHeavyWeightItems && ! HeavyDeliveryLogic::fourgonVehicleId() && isset($address)) {
+            Toastr::error(translate('messages.Heavy_items_require_an_active_DM_vehicle_category_named_Fourgon'));
+            return back();
+        }
 
         if($self_delivery_status != 1){
 
-            $data =  DMVehicle::where(function ($query) use ($distance_data) {
-                $query->where('starting_coverage_area', '<=', $distance_data)->where('maximum_coverage_area', '>=', $distance_data)
-                ->orWhere(function ($query) use ($distance_data) {
-                    $query->where('starting_coverage_area', '>=', $distance_data);
-                });
-            })
-            ->active()
-                ->orderBy('starting_coverage_area')->first();
+            if ($hasHeavyWeightItems && isset($address)) {
+                $fourgonId = HeavyDeliveryLogic::fourgonVehicleId();
+                $data = $fourgonId
+                    ? DMVehicle::where('id', $fourgonId)
+                        ->where(function ($query) use ($distance_data) {
+                            $query->where(function ($q) use ($distance_data) {
+                                $q->where('starting_coverage_area', '<=', $distance_data)->where('maximum_coverage_area', '>=', $distance_data);
+                            })->orWhere(function ($q) use ($distance_data) {
+                                $q->where('starting_coverage_area', '>=', $distance_data);
+                            });
+                        })
+                        ->active()
+                        ->orderBy('starting_coverage_area')
+                        ->first() : null;
+                if (! $data && $fourgonId) {
+                    $data = DMVehicle::active()->where('id', $fourgonId)->first();
+                }
+            } else {
+                $data =  DMVehicle::where(function ($query) use ($distance_data) {
+                    $query->where('starting_coverage_area', '<=', $distance_data)->where('maximum_coverage_area', '>=', $distance_data)
+                    ->orWhere(function ($query) use ($distance_data) {
+                        $query->where('starting_coverage_area', '>=', $distance_data);
+                    });
+                })
+                ->active()
+                    ->orderBy('starting_coverage_area')->first();
+            }
 
             $extra_charges = (float) (isset($data) ? $data->extra_charges  : 0);
             $vehicle_id = (isset($data) ? $data->id  : null);
         }
 
 
-        $cart = $request->session()->get('cart');
 
         $total_addon_price = 0;
         $product_price = 0;
@@ -597,6 +623,7 @@ class POSController extends Controller
         $order->original_delivery_charge = isset($address)?$address['delivery_fee']:0;
         $order->delivery_address = isset($address)?json_encode($address):null;
         $order->dm_vehicle_id = $vehicle_id;
+        $order->has_heavy_weight_items = $hasHeavyWeightItems;
         $order->checked = 1;
         $order->created_at = now();
         $order->schedule_at = now();

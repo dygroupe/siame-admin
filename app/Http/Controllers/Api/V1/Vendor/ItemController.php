@@ -48,6 +48,7 @@ class ItemController extends Controller
             'price' => 'required|numeric|min:0.01',
             'discount' => 'required|numeric|min:0',
             'translations'=>'required',
+            'weight_type' => 'nullable|integer|in:0,1',
         ], [
             'category_id.required' => translate('messages.category_required'),
         ]);
@@ -339,6 +340,7 @@ class ItemController extends Controller
         $item->stock= $request->current_stock;
         $item->images = $images;
         $item->unit_id = $request->unit;
+        $item->weight_type = (int) ($request->input('weight_type', 0));
         $item->organic = $request->organic??0;
         $item->is_halal =  $request->is_halal ?? 0;
         $item->save();
@@ -472,6 +474,7 @@ class ItemController extends Controller
             'category_id' => 'required',
             'price' => 'required|numeric|min:0.01',
             'discount' => 'required|numeric|min:0',
+            'weight_type' => 'nullable|integer|in:0,1',
 
         ], [
             'category_id.required' => translate('messages.category_required'),
@@ -684,6 +687,9 @@ class ItemController extends Controller
         $p->stock= $request->current_stock??0;
         $p->veg = $request->veg??0;
         $p->unit_id = $request->unit;
+        $p->weight_type = $request->has('weight_type')
+            ? (int) $request->weight_type
+            : (int) ($p->weight_type ?? 0);
         $p->organic = $request->organic??0;
         $p->is_halal =  $request->is_halal ?? 0;
 
@@ -997,6 +1003,7 @@ class ItemController extends Controller
         $item->store_id = $data->store_id;
         $item->module_id = $data->module_id;
         $item->unit_id = $data->unit_id;
+        $item->weight_type = (int) ($data->weight_type ?? 0);
         $item->item_id = $data->id;
 
         $item->category_id = $data->category_id;

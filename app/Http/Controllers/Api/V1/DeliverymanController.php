@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api\V1;
 ini_set('memory_limit', '-1');
 
 use App\CentralLogics\Helpers;
+use App\CentralLogics\HeavyDeliveryLogic;
 use App\CentralLogics\OrderLogic;
 use App\Http\Controllers\Controller;
 use App\Library\Payer;
@@ -229,8 +230,17 @@ class DeliverymanController extends Controller
                     });
             });
         }
-        if (isset($dm->vehicle_id)) {
+        if (HeavyDeliveryLogic::deliveryManIsFourgon($dm)) {
+            // Fourgon riders see every eligible order (heavy and light).
+        } elseif (isset($dm->vehicle_id)) {
             $orders = $orders->where('dm_vehicle_id', $dm->vehicle_id);
+            $orders = $orders->where(function ($q) {
+                $q->where('has_heavy_weight_items', 0)->orWhereNull('has_heavy_weight_items');
+            });
+        } else {
+            $orders = $orders->where(function ($q) {
+                $q->where('has_heavy_weight_items', 0)->orWhereNull('has_heavy_weight_items');
+            });
         }
         $orders = $orders->dmOrder()
             ->Notpos()
@@ -278,6 +288,14 @@ class DeliverymanController extends Controller
                     ['code' => 'dm_maximum_order_exceed', 'message' => translate('messages.dm_maximum_order_exceed_warning')],
                 ],
             ], 405);
+        }
+
+        if (HeavyDeliveryLogic::orderRequiresHeavyVehicle($order) && ! HeavyDeliveryLogic::deliveryManIsFourgon($dm)) {
+            return response()->json([
+                'errors' => [
+                    ['code' => 'heavy_order', 'message' => translate('messages.This_order_requires_a_Fourgon_delivery_vehicle')],
+                ],
+            ], 403);
         }
 
         $payments = $order->payments()->where('payment_method', 'cash_on_delivery')->exists();

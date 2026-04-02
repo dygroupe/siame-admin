@@ -43,6 +43,7 @@ class Item extends Model
         'order_count' => 'integer',
         'rating_count' => 'integer',
         'unit_id' => 'integer',
+        'weight_type' => 'integer',
         'is_halal' => 'integer',
     ];
 

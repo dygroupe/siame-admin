@@ -284,6 +284,7 @@ class ItemController extends Controller
         $food->category_ids = json_encode($category);
         $food->description = $request->description[array_search('default', $request->lang)];
         $food->unit_id = $request?->unit;
+        $food->weight_type = (int) ($request->input('weight_type', 0));
         $choice_options = [];
         if ($request->has('choice')) {
             foreach ($request->choice_no as $key => $no) {
@@ -630,6 +631,9 @@ class ItemController extends Controller
         $p = Item::find($id);
         $p->name = $request->name[array_search('default', $request->lang)];
         $p->unit_id = $request?->unit;
+        $p->weight_type = $request->has('weight_type')
+            ? (int) $request->weight_type
+            : (int) ($p->weight_type ?? 0);
         $category = [];
         if ($request->category_id != null) {
             array_push($category, [
@@ -1703,6 +1707,7 @@ class ItemController extends Controller
         $temp_item->store_id = $data->store_id;
         $temp_item->module_id = $data->module_id;
         $temp_item->unit_id = $data->unit_id;
+        $temp_item->weight_type = (int) ($data->weight_type ?? 0);
         $temp_item->item_id = $data->id;
 
         $temp_item->category_id = $data->category_id;

@@ -33,6 +33,7 @@ class Order extends Model
         'details_count' => 'integer',
         'module_id' => 'integer',
         'dm_vehicle_id' => 'integer',
+        'has_heavy_weight_items' => 'boolean',
         'processing_time' => 'integer',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
