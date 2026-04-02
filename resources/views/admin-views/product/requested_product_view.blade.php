@@ -199,6 +199,13 @@
                                     </span>
                                     @endif
                                 @endif
+                                @if ($product->weight_type !== null)
+                                    <span class="d-block mb-1">
+                                        <span>{{ translate('messages.weight_type') }}</span>
+                                        <span>:</span>
+                                        <strong>{{ $product->weight_type == 1 ? translate('messages.weight_type_heavy') : translate('messages.weight_type_light') }}</strong>
+                                    </span>
+                                @endif
                                 @if (config('module.' . $product->module->module_type)['item_available_time'])
                                 <span class="d-block mb-1">
                                     <span>{{ translate('messages.available_time_starts') }}</span>

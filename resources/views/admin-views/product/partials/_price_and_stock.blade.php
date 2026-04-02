@@ -129,6 +129,19 @@
                             </div>
                         @endif
 
+                        @php($weightTypeValue = (int) old('weight_type', isset($product) ? (($product->weight_type ?? 0) == 1 ? 1 : 0) : 0))
+                        <div class="col-sm-6 col-lg-3" id="weight_type_input">
+                            <div class="form-group mb-0 error-wrapper">
+                                <label class="input-label"
+                                    for="weight_type">{{ translate('messages.weight_type') }}</label>
+                                <select name="weight_type" id="weight_type" class="form-control js-select2-custom">
+                                    <option value="0" {{ $weightTypeValue === 0 ? 'selected' : '' }}>
+                                        {{ translate('messages.weight_type_light') }}</option>
+                                    <option value="1" {{ $weightTypeValue === 1 ? 'selected' : '' }}>
+                                        {{ translate('messages.weight_type_heavy') }}</option>
+                                </select>
+                            </div>
+                        </div>
 
                     </div>
                 </div>
